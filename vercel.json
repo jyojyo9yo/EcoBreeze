@@ -1,0 +1,5 @@
+{
+    "rewrites": [
+        { "source": "/config", "destination": "/api/config" }
+    ]
+}
