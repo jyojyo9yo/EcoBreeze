@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoBreeze Login</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="login-box">
+
+    <h1>EcoBreeze</h1>
+    <p>에너지 절약을 위한 스마트 에어컨</p>
+
+    <form id="loginForm">
+
+        <input type="email" id="email" placeholder="이메일" autocomplete="email" required>
+
+        <input type="password" id="password" placeholder="비밀번호" autocomplete="current-password" required>
+
+        <p class="error" id="errorMsg"></p>
+
+        <button type="submit">로그인</button>
+
+    </form>
+
+    <a href="signup.html">회원가입</a>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/script.js"></script>
+
+</body>
+</html>
