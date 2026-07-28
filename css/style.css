@@ -118,6 +118,46 @@ body{
     border-radius:8px;
 }
 
+.person-card{
+
+    margin-top:20px;
+
+    text-align:center;
+}
+
+.person-status{
+
+    font-size:32px;
+
+    font-weight:bold;
+
+    padding:18px 0;
+}
+
+.person-status.status-detected{
+
+    color:#ff6b6b;
+}
+
+.person-status.status-clear{
+
+    color:#20D6A0;
+}
+
+.person-status.status-offline{
+
+    color:#888;
+
+    font-size:22px;
+}
+
+.person-updated{
+
+    color:#c5cbc8;
+
+    font-size:13px;
+}
+
 h1{
 
     text-align:center;
