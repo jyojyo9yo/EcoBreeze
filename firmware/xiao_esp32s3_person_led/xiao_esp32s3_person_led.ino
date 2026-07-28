@@ -1,16 +1,12 @@
-// XIAO ESP32S3 Sense: publishes camera snapshots over MQTT and lights the
-// onboard LED when the inference server (running YOLO12n) reports a person.
-//
-// Data flow:
-//   this board --publish JPEG--> MQTT broker --subscribe--> server/person_detect.py (YOLO12n)
-//   server/person_detect.py --publish ON/OFF--> MQTT broker --subscribe--> this board (LED)
-//   server/person_detect.py also writes the result to Supabase for the web dashboard.
+// XIAO ESP32S3 Sense: serves camera snapshots over a local HTTP server and
+// lights the onboard LED when told to. The inference server (running
+// YOLO12n, on the same Wi-Fi network) polls /capture and calls /led/on or
+// /led/off based on what it sees -- see server/person_detect.py.
 //
 // Requires secrets.h (copy secrets.h.example -> secrets.h and fill in real values).
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <PubSubClient.h>
+#include <WebServer.h>
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "secrets.h"
@@ -18,31 +14,12 @@
 // XIAO ESP32S3 onboard user LED: GPIO21, active-LOW
 const int LED_PIN = LED_BUILTIN;
 
-const char *TOPIC_FRAME = "ecobreeze/" DEVICE_ID "/frame";
-const char *TOPIC_LED = "ecobreeze/" DEVICE_ID "/led";
-
-const unsigned long CAPTURE_INTERVAL_MS = 1500;
-unsigned long lastCaptureMs = 0;
-
-WiFiClientSecure secureClient;
-PubSubClient mqttClient(secureClient);
+WebServer server(80);
+bool ledOn = false;
 
 void setLed(bool on) {
+  ledOn = on;
   digitalWrite(LED_PIN, on ? LOW : HIGH);
-}
-
-void onMqttMessage(char *topic, byte *payload, unsigned int length) {
-  String msg;
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  msg.trim();
-
-  if (String(topic) == TOPIC_LED) {
-    if (msg == "ON") {
-      setLed(true);
-    } else if (msg == "OFF") {
-      setLed(false);
-    }
-  }
 }
 
 void setupCamera() {
@@ -68,21 +45,55 @@ void setupCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // Kept small (QQVGA) so a JPEG frame comfortably fits one MQTT publish over
-  // TLS. fb_count=1 + GRAB_WHEN_EMPTY captures on demand instead of streaming
-  // continuously -- streaming with fb_count=2/GRAB_LATEST flooded the serial
-  // log with "cam_hal: FB-OVF" and starved the WiFi/MQTT task, killing the
-  // MQTT connection every cycle.
-  config.frame_size = FRAMESIZE_QQVGA; // 160x120
-  config.jpeg_quality = psramFound() ? 14 : 15;
-  config.fb_count = 1;
-  config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  // fb_count=1 + GRAB_WHEN_EMPTY captures on demand instead of streaming
+  // continuously -- continuous capture (fb_count=2/GRAB_LATEST) flooded the
+  // serial log with "cam_hal: FB-OVF" and starved outgoing traffic badly
+  // enough to stall HTTP responses partway through (same failure mode we
+  // hit with MQTT earlier).
+  if (psramFound()) {
+    config.frame_size = FRAMESIZE_QQVGA; // 160x120 -- small, known to transfer reliably
+    config.jpeg_quality = 14;
+    config.fb_count = 1;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  } else {
+    config.frame_size = FRAMESIZE_QVGA;
+    config.jpeg_quality = 14;
+    config.fb_count = 1;
+    config.fb_location = CAMERA_FB_IN_DRAM;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  }
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
   }
+}
+
+void handleCapture() {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    server.send(503, "text/plain", "capture failed");
+    return;
+  }
+  WiFiClient client = server.client();
+  client.printf("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\nConnection: close\r\n\r\n", fb->len);
+  client.write(fb->buf, fb->len);
+  esp_camera_fb_return(fb);
+}
+
+void handleLedGet() {
+  server.send(200, "text/plain", ledOn ? "1" : "0");
+}
+
+void handleLedOn() {
+  setLed(true);
+  server.send(200, "text/plain", "1");
+}
+
+void handleLedOff() {
+  setLed(false);
+  server.send(200, "text/plain", "0");
 }
 
 void connectWifi() {
@@ -96,34 +107,6 @@ void connectWifi() {
   Serial.printf("\nWiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
-void connectMqtt() {
-  while (!mqttClient.connected()) {
-    Serial.print("Connecting to MQTT broker...");
-    String clientId = String(DEVICE_ID) + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-    if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD)) {
-      Serial.println(" connected");
-      mqttClient.subscribe(TOPIC_LED);
-    } else {
-      Serial.printf(" failed, rc=%d, retrying in 2s\n", mqttClient.state());
-      delay(2000);
-    }
-  }
-}
-
-void publishFrame() {
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
-  if (mqttClient.publish(TOPIC_FRAME, fb->buf, fb->len)) {
-    Serial.printf("Published frame (%u bytes)\n", fb->len);
-  } else {
-    Serial.println("Frame publish failed");
-  }
-  esp_camera_fb_return(fb);
-}
-
 void setup() {
   Serial.begin(115200);
 
@@ -133,27 +116,17 @@ void setup() {
   setupCamera();
   connectWifi();
 
-  secureClient.setInsecure(); // skip broker cert validation (fine for a hackathon demo)
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-  mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(24576); // fit a QVGA JPEG frame
-  mqttClient.setKeepAlive(30);
+  server.on("/capture", handleCapture);
+  server.on("/led", handleLedGet);
+  server.on("/led/on", handleLedOn);
+  server.on("/led/off", handleLedOff);
+  server.begin();
+  Serial.println("HTTP server started");
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     connectWifi();
   }
-  if (!mqttClient.connected()) {
-    connectMqtt();
-  }
-  mqttClient.loop();
-
-  unsigned long now = millis();
-  if (now - lastCaptureMs >= CAPTURE_INTERVAL_MS) {
-    lastCaptureMs = now;
-    publishFrame();
-  }
-
-  delay(20); // avoid hammering the TLS socket with a tight busy-loop
+  server.handleClient();
 }
