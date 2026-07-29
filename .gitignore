@@ -5,3 +5,22 @@
 !*.env.example
 firmware/**/secrets.h
 server/*.pt
+
+__pycache__/
+*.pyc
+
+# pi-boot-config: real files carry live secrets (wifi password, Supabase
+# service_role key, RPi Connect pairing token) -- only the .example
+# templates and meta-data (no secrets) are tracked.
+pi-boot-config/user-data
+pi-boot-config/network-config
+
+# raspi/ runtime state (session counters, live dashboard state, logs,
+# learned IR codes, file-based triggers) -- regenerated on the Pi, not code.
+raspi/session_count.json
+raspi/live_state.json
+raspi/night_log.csv
+raspi/event_log.csv
+raspi/ir_codes.json
+raspi/ecobreeze_state.json
+raspi/trigger_*

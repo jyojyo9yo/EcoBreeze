@@ -1,0 +1,226 @@
+#cloud-config
+manage_resolv_conf: false
+
+hostname: jyo
+manage_etc_hosts: true
+packages:
+- avahi-daemon
+- nginx
+- git
+- curl
+- python3-venv
+- python3-pip
+apt:
+  preserve_sources_list: true
+  conf: |
+    Acquire {
+      Check-Date "false";
+    };
+timezone: Asia/Seoul
+keyboard:
+  model: pc105
+  layout: "kr"
+user:
+  name: jyo
+  shell: /bin/bash
+  lock_passwd: false
+  passwd: "REPLACE_WITH_YOUR_PASSWORD_HASH"
+ssh_pwauth: true
+
+# --- EcoBreeze additions below (Imager-generated content above is untouched) ---
+#
+# 1. A static nginx status page at http://jyo.local so you can confirm the
+#    Pi is online from any browser on the network without SSH.
+# 2. The whole EcoBreeze repo cloned from GitHub, with two separate venvs
+#    (server/, raspi/), run as three systemd services that start on every
+#    boot and restart on failure:
+#      - ecobreeze-detect.service    -> server/person_detect.py
+#      - ecobreeze-main.service      -> raspi/ecobreeze_main.py
+#      - ecobreeze-dashboard.service -> raspi/dashboard.py
+#
+# NOTE: /opt/ecobreeze/server.env below embeds the same Supabase
+# service_role key and ESP32 IP that were in this repo's server/.env on the
+# PC as of 2026-07-29. If the ESP32 or Supabase project changes later, this
+# file (or /opt/ecobreeze/EcoBreeze/server/.env directly on the Pi) needs
+# updating to match.
+
+write_files:
+  - path: /var/www/html/index.html
+    content: |
+      <!DOCTYPE html>
+      <html lang="ko">
+      <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>EcoBreeze Pi</title>
+      <style>
+        body{font-family:sans-serif;background:#10261F;color:#fff;display:flex;
+             align-items:center;justify-content:center;height:100vh;margin:0;
+             text-align:center;}
+        h1{color:#20D6A0;}
+        p{color:#c5cbc8;}
+      </style>
+      </head>
+      <body>
+      <div>
+        <h1>EcoBreeze Pi 온라인</h1>
+        <p>Wi-Fi 연결 및 웹 서버가 정상 동작 중입니다.</p>
+        <p>호스트네임: jyo.local</p>
+      </div>
+      </body>
+      </html>
+    owner: root:root
+    permissions: '0644'
+
+  - path: /opt/ecobreeze/server.env
+    content: |
+      DEVICE_ID=cam1
+
+      ESP32_IP=REPLACE_WITH_ESP32_IP
+
+      SUPABASE_URL=https://REPLACE_WITH_YOUR_PROJECT.supabase.co
+      SUPABASE_SERVICE_KEY=REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY
+
+      PERSON_CONF_THRESHOLD=0.5
+      ON_STREAK=2
+      OFF_STREAK=3
+      HEARTBEAT_INTERVAL_S=5
+      POLL_INTERVAL_S=1.5
+    owner: root:root
+    permissions: '0600'
+
+  - path: /opt/ecobreeze/setup.sh
+    content: |
+      #!/bin/bash
+      set -e
+
+      echo "Waiting for real internet access..."
+      until curl -fsS --max-time 5 https://github.com >/dev/null 2>&1; do
+        sleep 10
+      done
+      echo "Internet is up, proceeding with setup."
+
+      mkdir -p /opt/ecobreeze
+      cd /opt/ecobreeze
+
+      if [ ! -d EcoBreeze ]; then
+        git clone https://github.com/jyojyo9yo/EcoBreeze.git
+      fi
+
+      cd EcoBreeze/server
+      python3 -m venv venv
+      venv/bin/pip install --upgrade pip
+      venv/bin/pip install -r requirements.txt
+      cp /opt/ecobreeze/server.env .env
+
+      cd /opt/ecobreeze/EcoBreeze/raspi
+      python3 -m venv venv
+      venv/bin/pip install --upgrade pip
+      venv/bin/pip install -r requirements.txt
+
+      chown -R jyo:jyo /opt/ecobreeze
+      touch /opt/ecobreeze/.setup-done
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/ecobreeze-setup.service
+    content: |
+      [Unit]
+      Description=EcoBreeze one-time setup (clone repo, install deps)
+      ConditionPathExists=!/opt/ecobreeze/.setup-done
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/ecobreeze/setup.sh
+      RemainAfterExit=yes
+      TimeoutStartSec=infinity
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/ecobreeze-detect.service
+    content: |
+      [Unit]
+      Description=EcoBreeze person detection (camera -> Supabase)
+      After=ecobreeze-setup.service network-online.target
+      Wants=network-online.target
+      Requires=ecobreeze-setup.service
+
+      [Service]
+      WorkingDirectory=/opt/ecobreeze/EcoBreeze/server
+      ExecStart=/opt/ecobreeze/EcoBreeze/server/venv/bin/python person_detect.py
+      Restart=on-failure
+      RestartSec=5
+      User=jyo
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/ecobreeze-main.service
+    content: |
+      [Unit]
+      Description=EcoBreeze AC/sleep-mode control loop
+      After=ecobreeze-setup.service network-online.target
+      Wants=network-online.target
+      Requires=ecobreeze-setup.service
+
+      [Service]
+      WorkingDirectory=/opt/ecobreeze/EcoBreeze/raspi
+      ExecStart=/opt/ecobreeze/EcoBreeze/raspi/venv/bin/python ecobreeze_main.py
+      Restart=on-failure
+      RestartSec=5
+      User=jyo
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/ecobreeze-dashboard.service
+    content: |
+      [Unit]
+      Description=EcoBreeze web dashboard
+      After=ecobreeze-setup.service network-online.target
+      Wants=network-online.target
+      Requires=ecobreeze-setup.service
+
+      [Service]
+      WorkingDirectory=/opt/ecobreeze/EcoBreeze/raspi
+      ExecStart=/opt/ecobreeze/EcoBreeze/raspi/venv/bin/python dashboard.py
+      Restart=on-failure
+      RestartSec=5
+      User=jyo
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  - [ systemctl, enable, --now, ssh ]
+  - [ sh, -c, "install -o jyo -m 700 -d /home/jyo/.config/com.raspberrypi.connect" ]
+  - [ sh, -c, "printf '%s\n' 'REPLACE_WITH_YOUR_RPI_CONNECT_PAIRING_TOKEN' > /home/jyo/.config/com.raspberrypi.connect/auth.key && chown jyo:jyo /home/jyo/.config/com.raspberrypi.connect/auth.key && chmod 600 /home/jyo/.config/com.raspberrypi.connect/auth.key" ]
+  - [ sh, -c, "install -o jyo -m 700 -d /home/jyo/.config/systemd/user/default.target.wants /home/jyo/.config/systemd/user/paths.target.wants" ]
+  - [ sh, -c, "UNIT_SRC=/usr/lib/systemd/user/rpi-connect.service; [ -f $UNIT_SRC ] || UNIT_SRC=/lib/systemd/user/rpi-connect.service; ln -sf $UNIT_SRC /home/jyo/.config/systemd/user/default.target.wants/rpi-connect.service" ]
+  - [ sh, -c, "UNIT_SRC=/usr/lib/systemd/user/rpi-connect-signin.path; [ -f $UNIT_SRC ] || UNIT_SRC=/lib/systemd/user/rpi-connect-signin.path; ln -sf $UNIT_SRC /home/jyo/.config/systemd/user/paths.target.wants/rpi-connect-signin.path" ]
+  - [ sh, -c, "UNIT_SRC=/usr/lib/systemd/user/rpi-connect-wayvnc.service; [ -f $UNIT_SRC ] || UNIT_SRC=/lib/systemd/user/rpi-connect-wayvnc.service; ln -sf $UNIT_SRC /home/jyo/.config/systemd/user/default.target.wants/rpi-connect-wayvnc.service" ]
+  - [ sh, -c, "chown -R jyo:jyo /home/jyo/.config/systemd" ]
+  - [ sh, -c, "install -d -m 0755 /var/lib/systemd/linger" ]
+  - [ sh, -c, "install -m 0644 /dev/null /var/lib/systemd/linger/jyo" ]
+  - [ sh, -c, "loginctl enable-linger jyo 2>/dev/null || true" ]
+  - [ sleep, "2" ]
+  - [ sh, -c, "systemctl --quiet --user --machine=jyo@.host daemon-reload || true" ]
+  - [ sh, -c, "systemctl --quiet --user --machine=jyo@.host start rpi-connect.service || true" ]
+  - [ sh, -c, "systemctl --quiet --user --machine=jyo@.host start rpi-connect-signin.path || true" ]
+  - [ sh, -c, "systemctl --quiet --user --machine=jyo@.host start rpi-connect-wayvnc.service || true" ]
+  - systemctl daemon-reload
+  - systemctl enable --now nginx
+  - systemctl enable --now avahi-daemon
+  - systemctl enable --now ecobreeze-setup.service
+  - systemctl enable --now ecobreeze-detect.service
+  - systemctl enable --now ecobreeze-main.service
+  - systemctl enable --now ecobreeze-dashboard.service

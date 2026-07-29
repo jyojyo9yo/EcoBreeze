@@ -1,0 +1,13 @@
+# Applied once by cloud-init on first boot (see meta-data comments for why).
+# Netplan v2 config joining the phone hotspot directly in station (client)
+# mode -- the Pi connects to this existing Wi-Fi network like any normal
+# device, it does not host its own access point.
+network:
+  version: 2
+  wifis:
+    wlan0:
+      dhcp4: true
+      optional: false
+      access-points:
+        "YOUR_WIFI_SSID":
+          password: "YOUR_WIFI_PASSWORD"
