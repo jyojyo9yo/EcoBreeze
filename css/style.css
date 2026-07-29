@@ -144,6 +144,11 @@ body{
     color:#20D6A0;
 }
 
+.person-status.status-lying{
+
+    color:#ffa726;
+}
+
 .person-status.status-offline{
 
     color:#888;

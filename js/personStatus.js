@@ -20,11 +20,14 @@
         if (isStale) {
             statusEl.textContent = "연결 끊김";
             statusEl.className = "person-status status-offline";
+        } else if (row.person_detected && row.lying_detected) {
+            statusEl.textContent = "누워있음";
+            statusEl.className = "person-status status-lying";
         } else if (row.person_detected) {
-            statusEl.textContent = "감지됨";
+            statusEl.textContent = "사람 탐지";
             statusEl.className = "person-status status-detected";
         } else {
-            statusEl.textContent = "미감지";
+            statusEl.textContent = "사람 없음";
             statusEl.className = "person-status status-clear";
         }
 
@@ -34,7 +37,7 @@
     async function poll(client) {
         const { data, error } = await client
             .from("device_status")
-            .select("person_detected, updated_at")
+            .select("person_detected, lying_detected, updated_at")
             .eq("device_id", DEVICE_ID)
             .maybeSingle();
 

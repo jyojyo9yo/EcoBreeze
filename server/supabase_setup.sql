@@ -4,9 +4,13 @@
 create table if not exists device_status (
   device_id text primary key,
   person_detected boolean not null default false,
+  lying_detected boolean not null default false,
   confidence real,
   updated_at timestamptz not null default now()
 );
+
+-- If the table already existed from before lying-down detection was added:
+alter table device_status add column if not exists lying_detected boolean not null default false;
 
 alter table device_status enable row level security;
 

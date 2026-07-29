@@ -1,8 +1,10 @@
 """
 Polls camera snapshots from the XIAO ESP32S3 over local HTTP, runs YOLO12n
-person detection on each frame, and:
+person detection on each frame, classifies standing vs. lying down from the
+detected person's bounding-box aspect ratio, and:
   - calls /led/on or /led/off on the board
-  - writes the latest status to Supabase for the web dashboard to poll
+  - writes the latest status (person + posture) to Supabase for the web
+    dashboard to poll
 
 Setup: pip install -r requirements.txt, then copy .env.example to .env and
 fill in the ESP32's IP + Supabase credentials, then `python person_detect.py`.
@@ -27,6 +29,10 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
 PERSON_CONF_THRESHOLD = float(os.environ.get("PERSON_CONF_THRESHOLD", 0.5))
+# Person box width / height ratio above which we call it "lying down".
+# A standing person's box is much taller than wide (~0.3-0.5); lying down
+# flips that to wider than tall.
+LYING_ASPECT_RATIO_THRESHOLD = float(os.environ.get("LYING_ASPECT_RATIO_THRESHOLD", 1.2))
 ON_STREAK = int(os.environ.get("ON_STREAK", 2))
 OFF_STREAK = int(os.environ.get("OFF_STREAK", 3))
 HEARTBEAT_INTERVAL_S = float(os.environ.get("HEARTBEAT_INTERVAL_S", 5))
@@ -50,7 +56,14 @@ def set_led(on: bool) -> None:
     requests.get(f"http://{ESP32_IP}/led/{path}", timeout=5)
 
 
-def update_supabase(person_detected: bool, confidence: float) -> None:
+def is_lying_down(box) -> bool:
+    x1, y1, x2, y2 = box.xyxy[0]
+    width = float(x2 - x1)
+    height = float(y2 - y1)
+    return height > 0 and (width / height) >= LYING_ASPECT_RATIO_THRESHOLD
+
+
+def update_supabase(person_detected: bool, lying_detected: bool, confidence: float) -> None:
     url = f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -60,6 +73,7 @@ def update_supabase(person_detected: bool, confidence: float) -> None:
     }
     body = {
         "person_detected": person_detected,
+        "lying_detected": lying_detected,
         "confidence": confidence,
         # Postgres only applies "default now()" on INSERT, not UPDATE, so the
         # timestamp has to be set explicitly on every write here.
@@ -75,6 +89,11 @@ def main():
     person_present = False
     hit_streak = 0
     miss_streak = 0
+
+    lying_present = False
+    lying_hit_streak = 0
+    lying_miss_streak = 0
+
     last_heartbeat = 0.0
 
     print(f"Polling http://{ESP32_IP}/capture every {POLL_INTERVAL_S}s...")
@@ -94,9 +113,11 @@ def main():
 
         results = model(frame, verbose=False)[0]
         best_conf = 0.0
+        best_box = None
         for box in results.boxes:
-            if int(box.cls[0]) == PERSON_CLASS_ID:
-                best_conf = max(best_conf, float(box.conf[0]))
+            if int(box.cls[0]) == PERSON_CLASS_ID and float(box.conf[0]) > best_conf:
+                best_conf = float(box.conf[0])
+                best_box = box
 
         person_in_frame = best_conf >= PERSON_CONF_THRESHOLD
         if person_in_frame:
@@ -105,6 +126,14 @@ def main():
         else:
             miss_streak += 1
             hit_streak = 0
+
+        lying_now = person_in_frame and best_box is not None and is_lying_down(best_box)
+        if lying_now:
+            lying_hit_streak += 1
+            lying_miss_streak = 0
+        else:
+            lying_miss_streak += 1
+            lying_hit_streak = 0
 
         state_changed = False
         if not person_present and hit_streak >= ON_STREAK:
@@ -118,12 +147,28 @@ def main():
             print("No person -> LED OFF")
             set_led(False)
 
+        if not person_present:
+            # Can't be lying down if nobody's there.
+            if lying_present:
+                state_changed = True
+            lying_present = False
+            lying_hit_streak = 0
+            lying_miss_streak = 0
+        elif not lying_present and lying_hit_streak >= ON_STREAK:
+            lying_present = True
+            state_changed = True
+            print("Person lying down")
+        elif lying_present and lying_miss_streak >= OFF_STREAK:
+            lying_present = False
+            state_changed = True
+            print("Person standing back up")
+
         # Write a heartbeat even when nothing changed, so the dashboard can
         # tell "still watching, nobody there" apart from "server is down".
         now = time.monotonic()
         if state_changed or now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
             last_heartbeat = now
-            update_supabase(person_present, best_conf)
+            update_supabase(person_present, lying_present, best_conf)
 
         elapsed = time.monotonic() - loop_start
         time.sleep(max(0.0, POLL_INTERVAL_S - elapsed))
