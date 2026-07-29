@@ -65,7 +65,7 @@ PMV_SOLVE_EPS = 0.01
 # [center - half_width, center + half_width] counts as "AC should be on".
 SENSITIVITY_HALF_WIDTH_C = {"low": 0.7, "normal": 0.5, "high": 0.2}
 DEFAULT_SENSITIVITY = "normal"
-DEFAULT_SLEEP_DELAY_MIN = 10
+DEFAULT_SLEEP_DELAY_SEC = 600
 
 print("Loading YOLO12n model...")
 model = YOLO("yolo12n.pt")
@@ -105,7 +105,7 @@ def fetch_settings() -> dict:
     overrides) back from Supabase."""
     url = (
         f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
-        "&select=ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_min"
+        "&select=ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_sec"
     )
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -254,7 +254,7 @@ def main():
             print(f"Settings read failed: {e}")
 
         sensitivity = settings.get("ai_sensitivity") or DEFAULT_SENSITIVITY
-        sleep_delay_min = settings.get("sleep_delay_min") or DEFAULT_SLEEP_DELAY_MIN
+        sleep_delay_sec = settings.get("sleep_delay_sec") or DEFAULT_SLEEP_DELAY_SEC
 
         if settings.get("ac_manual"):
             new_ac_on = bool(settings.get("ac_on"))
@@ -288,7 +288,7 @@ def main():
         elif (
             not sleep_on
             and lying_auto_since is not None
-            and time.monotonic() - lying_auto_since >= sleep_delay_min * 60
+            and time.monotonic() - lying_auto_since >= sleep_delay_sec
         ):
             new_sleep_on = True
         else:

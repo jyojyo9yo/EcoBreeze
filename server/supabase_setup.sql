@@ -13,7 +13,7 @@ create table if not exists device_status (
   ac_manual boolean not null default false,
   sleep_on boolean not null default false,
   sleep_manual boolean not null default false,
-  sleep_delay_min integer not null default 10,
+  sleep_delay_sec integer not null default 600,
   updated_at timestamptz not null default now()
 );
 
@@ -36,7 +36,13 @@ alter table device_status add column if not exists ac_on boolean not null defaul
 alter table device_status add column if not exists ac_manual boolean not null default false;
 alter table device_status add column if not exists sleep_on boolean not null default false;
 alter table device_status add column if not exists sleep_manual boolean not null default false;
-alter table device_status add column if not exists sleep_delay_min integer not null default 10;
+alter table device_status add column if not exists sleep_delay_sec integer not null default 600;
+
+-- One-time migration if the table still has the old sleep_delay_min (minutes)
+-- column from an earlier version of this schema (replaced by sleep_delay_sec
+-- so the dashboard can set the delay in seconds too, for quick testing):
+--   alter table device_status rename column sleep_delay_min to sleep_delay_sec;
+--   update device_status set sleep_delay_sec = sleep_delay_sec * 60;
 
 alter table device_status enable row level security;
 

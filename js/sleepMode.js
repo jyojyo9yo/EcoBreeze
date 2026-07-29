@@ -1,8 +1,10 @@
 (function sleepModeController() {
     const DEVICE_ID = "cam1";
-    const DELAY_KEY = "ecobreeze_sleep_mode_delay_min";
-    const MIN_DELAY = 1;
-    const MAX_DELAY = 60;
+    const UNIT_KEY = "ecobreeze_sleep_mode_unit"; // display-only preference, not sent to Supabase
+    const MIN_SEC = 5;
+    const MAX_SEC = 3600;
+    const STEP_MIN_UNIT = 60; // +/- 1 minute
+    const STEP_SEC_UNIT = 5; // +/- 5 seconds
 
     const modeBtn = document.getElementById("sleepModeBtn");
     const modal = document.getElementById("sleepModal");
@@ -12,20 +14,26 @@
     const delayValueEl = document.getElementById("sleepDelayValue");
     const delayDownBtn = document.getElementById("sleepDelayDownBtn");
     const delayUpBtn = document.getElementById("sleepDelayUpBtn");
+    const unitMinBtn = document.getElementById("sleepUnitMinBtn");
+    const unitSecBtn = document.getElementById("sleepUnitSecBtn");
     const autoNoteEl = document.getElementById("sleepAutoNote");
 
-    // on/manual are driven by person_detect.py via Supabase: it tracks how
-    // long someone's been lying down and auto-triggers sleep_on after
-    // sleep_delay_min, unless the dashboard has manually taken over (sleep_manual).
+    // on/manual/delaySeconds are driven by person_detect.py via Supabase: it
+    // tracks how long someone's been lying down and auto-triggers sleep_on
+    // after delaySeconds, unless the dashboard has manually taken over.
     let on = false;
     let manual = false;
-    let delayMinutes = parseInt(localStorage.getItem(DELAY_KEY), 10);
-    if (!Number.isFinite(delayMinutes)) delayMinutes = 10;
+    let delaySeconds = 600;
+    let unit = localStorage.getItem(UNIT_KEY) === "sec" ? "sec" : "min";
 
     let client = null;
     getSupabaseClient().then((c) => {
         client = c;
     });
+
+    function formatDelay() {
+        return unit === "sec" ? delaySeconds + "초" : Math.round(delaySeconds / 60) + "분";
+    }
 
     function renderModeBtn() {
         modeBtn.textContent = "수면 모드 (" + (on ? "켜짐" : "꺼짐") + ")";
@@ -36,12 +44,18 @@
         toggleBtn.textContent = on ? "ON" : "OFF";
         toggleBtn.classList.toggle("on", on);
         toggleBtn.classList.toggle("off", !on);
-        autoNoteEl.textContent = on && !manual ? "누운 지 " + delayMinutes + "분 경과 - 자동으로 켜짐" : "";
+        autoNoteEl.textContent = on && !manual ? "누운 지 " + formatDelay() + " 경과 - 자동으로 켜짐" : "";
         renderModeBtn();
     }
 
     function renderDelay() {
-        delayValueEl.textContent = delayMinutes + "분";
+        delayValueEl.textContent = formatDelay();
+    }
+
+    function renderUnit() {
+        unitMinBtn.classList.toggle("selected", unit === "min");
+        unitSecBtn.classList.toggle("selected", unit === "sec");
+        renderDelay();
     }
 
     modeBtn.addEventListener("click", () => modal.classList.remove("hidden"));
@@ -62,35 +76,48 @@
         }
     });
 
-    async function setDelay(next) {
-        delayMinutes = next;
-        localStorage.setItem(DELAY_KEY, String(delayMinutes));
+    async function setDelay(nextSeconds) {
+        delaySeconds = Math.min(MAX_SEC, Math.max(MIN_SEC, nextSeconds));
         renderDelay();
         renderToggle();
         if (client) {
             await client
                 .from("device_status")
-                .update({ sleep_delay_min: delayMinutes })
+                .update({ sleep_delay_sec: delaySeconds })
                 .eq("device_id", DEVICE_ID);
         }
     }
 
-    delayDownBtn.addEventListener("click", () => setDelay(Math.max(MIN_DELAY, delayMinutes - 1)));
-    delayUpBtn.addEventListener("click", () => setDelay(Math.min(MAX_DELAY, delayMinutes + 1)));
+    delayDownBtn.addEventListener("click", () => {
+        setDelay(delaySeconds - (unit === "sec" ? STEP_SEC_UNIT : STEP_MIN_UNIT));
+    });
+    delayUpBtn.addEventListener("click", () => {
+        setDelay(delaySeconds + (unit === "sec" ? STEP_SEC_UNIT : STEP_MIN_UNIT));
+    });
+
+    unitMinBtn.addEventListener("click", () => {
+        unit = "min";
+        localStorage.setItem(UNIT_KEY, unit);
+        renderUnit();
+    });
+    unitSecBtn.addEventListener("click", () => {
+        unit = "sec";
+        localStorage.setItem(UNIT_KEY, unit);
+        renderUnit();
+    });
 
     document.addEventListener("ecobreeze:status", (e) => {
         const row = e.detail && e.detail.row;
         if (!row) return;
         on = !!row.sleep_on;
         manual = !!row.sleep_manual;
-        if (Number.isFinite(row.sleep_delay_min)) {
-            delayMinutes = row.sleep_delay_min;
-            localStorage.setItem(DELAY_KEY, String(delayMinutes));
+        if (Number.isFinite(row.sleep_delay_sec)) {
+            delaySeconds = row.sleep_delay_sec;
             renderDelay();
         }
         renderToggle();
     });
 
     renderToggle();
-    renderDelay();
+    renderUnit();
 })();

@@ -204,6 +204,41 @@ body{
     background:#25443a;
 }
 
+.unit-toggle{
+
+    display:flex;
+
+    gap:6px;
+}
+
+.unit-btn{
+
+    padding:6px 14px;
+
+    border:2px solid #e0e0e0;
+
+    border-radius:10px;
+
+    background:white;
+
+    color:#555;
+
+    font-size:13px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+}
+
+.unit-btn.selected{
+
+    border-color:#20D6A0;
+
+    background:#20D6A0;
+
+    color:white;
+}
+
 .setting-value{
 
     color:#10261F;
