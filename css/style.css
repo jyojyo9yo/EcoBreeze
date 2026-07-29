@@ -119,6 +119,178 @@ h1{
     letter-spacing:1px;
 }
 
+.ai-mode-btn{
+
+    display:block;
+
+    margin:20px auto 0;
+
+    padding:12px 28px;
+
+    border:none;
+
+    border-radius:14px;
+
+    background:#10261F;
+
+    color:#20D6A0;
+
+    font-size:16px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+}
+
+.ai-mode-btn:hover{
+
+    background:#183a2e;
+}
+
+.modal-overlay{
+
+    position:fixed;
+
+    inset:0;
+
+    background:rgba(0,0,0,.5);
+
+    display:flex;
+
+    justify-content:center;
+
+    align-items:center;
+
+    z-index:100;
+}
+
+.modal-overlay.hidden{
+
+    display:none;
+}
+
+.modal-box{
+
+    width:360px;
+
+    background:white;
+
+    padding:35px;
+
+    border-radius:25px;
+
+    box-shadow:0 20px 40px rgba(0,0,0,.25);
+
+    text-align:center;
+}
+
+.modal-title{
+
+    font-size:22px;
+
+    font-weight:bold;
+
+    color:#10261F;
+}
+
+.modal-subtitle{
+
+    margin-top:10px;
+
+    font-size:14px;
+
+    color:#777;
+}
+
+.sensitivity-options{
+
+    display:flex;
+
+    gap:10px;
+
+    margin-top:25px;
+}
+
+.sensitivity-option{
+
+    flex:1;
+
+    padding:14px 0;
+
+    border:2px solid #e0e0e0;
+
+    border-radius:12px;
+
+    background:white;
+
+    color:#555;
+
+    font-size:15px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+
+    transition:.2s;
+}
+
+.sensitivity-option.selected{
+
+    border-color:#20D6A0;
+
+    background:#20D6A0;
+
+    color:white;
+}
+
+.modal-actions{
+
+    display:flex;
+
+    gap:10px;
+
+    margin-top:30px;
+}
+
+.modal-actions button{
+
+    flex:1;
+
+    padding:14px 0;
+
+    border:none;
+
+    border-radius:12px;
+
+    font-size:15px;
+
+    cursor:pointer;
+}
+
+.modal-btn-secondary{
+
+    background:#eee;
+
+    color:#555;
+}
+
+.modal-btn-secondary:hover{
+
+    background:#e0e0e0;
+}
+
+.modal-btn-primary{
+
+    background:#20D6A0;
+
+    color:white;
+}
+
+.modal-btn-primary:hover{
+
+    background:#16b98a;
+}
+
 /* ---------------- 로그인 ---------------- */
 
 .login-box{

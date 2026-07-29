@@ -5,13 +5,15 @@
 // -- see server/person_detect.py.
 //
 // Requires secrets.h (copy secrets.h.example -> secrets.h and fill in real values).
-// Requires the "Adafruit BME280 Library" (and its "Adafruit Unified Sensor"
-// dependency) installed via Arduino IDE's Library Manager.
+// Requires the "SparkFun BME280" library installed via Arduino IDE's Library
+// Manager. (Not "Adafruit BME280 Library": its Adafruit_Sensor dependency
+// redeclares `sensor_t`, which conflicts with the esp32-camera driver's own
+// `sensor_t` typedef and fails to compile.)
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
-#include <Adafruit_BME280.h>
+#include <SparkFunBME280.h>
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "secrets.h"
@@ -26,7 +28,7 @@ const int LED_PIN = LED_BUILTIN;
 const int BME_SDA_PIN = 5;
 const int BME_SCL_PIN = 6;
 TwoWire bmeWire = TwoWire(1);
-Adafruit_BME280 bme;
+BME280 bme;
 bool bmeReady = false;
 
 WebServer server(80);
@@ -116,8 +118,8 @@ void handleSensor() {
     server.send(503, "application/json", "{\"error\":\"bme280 not found\"}");
     return;
   }
-  float tempC = bme.readTemperature();
-  float humidity = bme.readHumidity();
+  float tempC = bme.readTempC();
+  float humidity = bme.readFloatHumidity();
   char body[64];
   snprintf(body, sizeof(body), "{\"temperature\":%.2f,\"humidity\":%.2f}", tempC, humidity);
   server.send(200, "application/json", body);
@@ -143,7 +145,12 @@ void setup() {
   setupCamera();
 
   bmeWire.begin(BME_SDA_PIN, BME_SCL_PIN);
-  bmeReady = bme.begin(0x76, &bmeWire) || bme.begin(0x77, &bmeWire);
+  bme.setI2CAddress(0x76);
+  bmeReady = bme.beginI2C(bmeWire);
+  if (!bmeReady) {
+    bme.setI2CAddress(0x77);
+    bmeReady = bme.beginI2C(bmeWire);
+  }
   Serial.println(bmeReady ? "BME280 ready" : "BME280 not found");
 
   connectWifi();

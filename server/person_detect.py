@@ -120,24 +120,23 @@ def main():
     while True:
         loop_start = time.monotonic()
 
+        frame = None
         try:
             frame = fetch_frame()
         except requests.RequestException as e:
             print(f"Capture failed: {e}")
-            time.sleep(POLL_INTERVAL_S)
-            continue
 
-        if frame is None:
-            time.sleep(POLL_INTERVAL_S)
-            continue
-
-        results = model(frame, verbose=False)[0]
+        # No camera attached yet is a normal, ongoing state (not a transient
+        # error) -- fall through so the BME280 reading and heartbeat below
+        # still reach Supabase instead of getting skipped every loop.
         best_conf = 0.0
         best_box = None
-        for box in results.boxes:
-            if int(box.cls[0]) == PERSON_CLASS_ID and float(box.conf[0]) > best_conf:
-                best_conf = float(box.conf[0])
-                best_box = box
+        if frame is not None:
+            results = model(frame, verbose=False)[0]
+            for box in results.boxes:
+                if int(box.cls[0]) == PERSON_CLASS_ID and float(box.conf[0]) > best_conf:
+                    best_conf = float(box.conf[0])
+                    best_box = box
 
         person_in_frame = best_conf >= PERSON_CONF_THRESHOLD
         if person_in_frame:
