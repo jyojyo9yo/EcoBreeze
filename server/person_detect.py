@@ -172,6 +172,7 @@ def main():
 
     ac_on = False
     sleep_on = False
+    green_led_on = False
     lying_auto_since = None  # monotonic time when continuous lying started
 
     last_heartbeat = 0.0
@@ -298,8 +299,16 @@ def main():
             sleep_on = new_sleep_on
             state_changed = True
             mode = "manual" if settings.get("sleep_manual") else "auto"
-            print(f"Sleep mode {'ON' if sleep_on else 'OFF'} ({mode}) -> green LED")
-            set_green_led(sleep_on)
+            print(f"Sleep mode {'ON' if sleep_on else 'OFF'} ({mode})")
+
+        # Sleep mode is a setting (shown as "on" on the dashboard even while
+        # the room is briefly empty), but the physical green LED should only
+        # ever be lit while someone is actually there to see it.
+        new_green_led_on = sleep_on and person_present
+        if new_green_led_on != green_led_on:
+            green_led_on = new_green_led_on
+            print(f"Green LED {'ON' if green_led_on else 'OFF'} (sleep_on={sleep_on}, person_present={person_present})")
+            set_green_led(green_led_on)
 
         # Write a heartbeat even when nothing changed, so the dashboard can
         # tell "still watching, nobody there" apart from "server is down".
