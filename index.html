@@ -41,11 +41,73 @@
 
     </div>
 
-    <button id="aiModeBtn" class="ai-mode-btn">AI 모드</button>
+    <div class="mode-btn-row">
+        <button id="acModeBtn" class="mode-btn">에어컨</button>
+        <button id="sleepModeBtn" class="mode-btn">수면 모드</button>
+        <button id="aiModeBtn" class="mode-btn">AI 모드</button>
+    </div>
 
     <h1>EcoBreeze</h1>
 
     <button id="logoutBtn" class="logout-btn">로그아웃</button>
+
+</div>
+
+<div id="acModal" class="modal-overlay hidden">
+
+    <div class="modal-box">
+
+        <div class="modal-title">에어컨</div>
+
+        <div class="toggle-row">
+            <span id="acStatusLabel" class="status-label">꺼짐</span>
+            <button id="acToggleBtn" class="toggle-btn off">OFF</button>
+        </div>
+
+        <div class="setting-row">
+            <span class="setting-label">설정 온도</span>
+            <div class="stepper">
+                <button id="tempDownBtn" class="stepper-btn">-</button>
+                <span id="tempSettingValue" class="setting-value">24.0°C</span>
+                <button id="tempUpBtn" class="stepper-btn">+</button>
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button id="acModalClose" class="modal-btn-primary">닫기</button>
+        </div>
+
+    </div>
+
+</div>
+
+<div id="sleepModal" class="modal-overlay hidden">
+
+    <div class="modal-box">
+
+        <div class="modal-title">수면 모드</div>
+
+        <div class="toggle-row">
+            <span id="sleepStatusLabel" class="status-label">꺼짐</span>
+            <button id="sleepToggleBtn" class="toggle-btn off">OFF</button>
+        </div>
+
+        <div class="setting-row">
+            <span class="setting-label">누운 후 자동 실행</span>
+            <div class="stepper">
+                <button id="sleepDelayDownBtn" class="stepper-btn">-</button>
+                <span id="sleepDelayValue" class="setting-value">10분</span>
+                <button id="sleepDelayUpBtn" class="stepper-btn">+</button>
+            </div>
+        </div>
+
+        <div id="sleepAutoNote" class="auto-note"></div>
+
+        <div class="modal-actions">
+            <button id="sleepModalClose" class="modal-btn-primary">닫기</button>
+        </div>
+
+    </div>
 
 </div>
 
@@ -76,6 +138,8 @@
 <script src="js/supabaseClient.js"></script>
 <script src="js/app.js"></script>
 <script src="js/personStatus.js"></script>
+<script src="js/acControl.js"></script>
+<script src="js/sleepMode.js"></script>
 <script src="js/aiMode.js"></script>
 
 </body>

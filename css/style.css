@@ -106,6 +106,128 @@ body{
     font-size:13px;
 }
 
+.toggle-row{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+}
+
+.status-label{
+
+    color:#555;
+
+    font-size:16px;
+}
+
+.toggle-btn{
+
+    padding:10px 26px;
+
+    border:none;
+
+    border-radius:12px;
+
+    font-size:14px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+}
+
+.toggle-btn.off{
+
+    background:#2a3d35;
+
+    color:#888;
+}
+
+.toggle-btn.on{
+
+    background:#20D6A0;
+
+    color:#10261F;
+}
+
+.setting-row{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-top:20px;
+}
+
+.setting-label{
+
+    color:#555;
+
+    font-size:15px;
+}
+
+.stepper{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:12px;
+}
+
+.stepper-btn{
+
+    width:34px;
+
+    height:34px;
+
+    border:none;
+
+    border-radius:50%;
+
+    background:#1c342b;
+
+    color:white;
+
+    font-size:20px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+}
+
+.stepper-btn:hover{
+
+    background:#25443a;
+}
+
+.setting-value{
+
+    color:#10261F;
+
+    font-weight:bold;
+
+    font-size:18px;
+
+    min-width:70px;
+
+    text-align:center;
+}
+
+.auto-note{
+
+    margin-top:14px;
+
+    font-size:12px;
+
+    color:#ffa726;
+
+    min-height:14px;
+}
+
 h1{
 
     text-align:center;
@@ -119,32 +241,39 @@ h1{
     letter-spacing:1px;
 }
 
-.ai-mode-btn{
+.mode-btn-row{
 
-    display:block;
+    display:flex;
 
-    margin:20px auto 0;
+    gap:10px;
 
-    padding:12px 28px;
+    margin-top:20px;
+}
 
-    border:none;
+.mode-btn{
+
+    flex:1;
+
+    padding:14px 6px;
+
+    border:2px solid #20D6A0;
 
     border-radius:14px;
 
-    background:#10261F;
+    background:white;
 
     color:#20D6A0;
 
-    font-size:16px;
+    font-size:13px;
 
     font-weight:bold;
 
     cursor:pointer;
 }
 
-.ai-mode-btn:hover{
+.mode-btn:hover{
 
-    background:#183a2e;
+    background:#eafbf5;
 }
 
 .modal-overlay{

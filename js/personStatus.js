@@ -15,6 +15,7 @@
             updatedAtEl.textContent = "";
             tempEl.textContent = "--°C";
             humidityEl.textContent = "습도 --%";
+            document.dispatchEvent(new CustomEvent("ecobreeze:status", { detail: { row: null, lying: false } }));
             return;
         }
 
@@ -39,12 +40,18 @@
 
         tempEl.textContent = row.temperature != null ? row.temperature.toFixed(1) + "°C" : "--°C";
         humidityEl.textContent = "습도 " + (row.humidity != null ? row.humidity.toFixed(0) + "%" : "--%");
+
+        const lying = !isStale && !!(row.person_detected && row.lying_detected);
+        document.dispatchEvent(new CustomEvent("ecobreeze:status", { detail: { row: row, lying: lying } }));
     }
 
     async function poll(client) {
         const { data, error } = await client
             .from("device_status")
-            .select("person_detected, lying_detected, temperature, humidity, updated_at")
+            .select(
+                "person_detected, lying_detected, temperature, humidity, updated_at," +
+                    "ai_sensitivity, ac_on, ac_manual, sleep_on, sleep_manual, sleep_delay_min"
+            )
             .eq("device_id", DEVICE_ID)
             .maybeSingle();
 

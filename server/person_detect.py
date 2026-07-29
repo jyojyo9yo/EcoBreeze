@@ -2,9 +2,16 @@
 Polls camera snapshots from the XIAO ESP32S3 over local HTTP, runs YOLO12n
 person detection on each frame, classifies standing vs. lying down from the
 detected person's bounding-box aspect ratio, and:
-  - calls /led/on or /led/off on the board
-  - writes the latest status (person + posture) to Supabase for the web
-    dashboard to poll
+  - calls /led/on or /led/off on the board for person presence
+  - computes a PMV-based comfort band from the BME280 reading (see pmv.py,
+    ported from the raspi/ teammate's comfort-band code) and drives the
+    blue LED (D1) when the room is outside it -- unless the dashboard has
+    taken manual control, in which case it just mirrors whatever the
+    dashboard last set
+  - drives the green LED (D0) once someone has been lying down continuously
+    for longer than the dashboard's configured sleep-mode delay, same
+    manual-override rule
+  - writes the latest status to Supabase for the web dashboard to poll
 
 Setup: pip install -r requirements.txt, then copy .env.example to .env and
 fill in the ESP32's IP + Supabase credentials, then `python person_detect.py`.
@@ -21,6 +28,8 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 from ultralytics import YOLO
+
+from pmv import solve_ta_for_target_pmv
 
 load_dotenv()
 
@@ -41,6 +50,22 @@ HEARTBEAT_INTERVAL_S = float(os.environ.get("HEARTBEAT_INTERVAL_S", 5))
 POLL_INTERVAL_S = float(os.environ.get("POLL_INTERVAL_S", 1.5))
 
 PERSON_CLASS_ID = 0  # COCO "person"
+
+# PMV parameters (sleep-condition assumptions), matching raspi/config.py so
+# the "optimal temperature" comes out the same on both systems.
+PMV_MET = 0.75
+PMV_CLO = 1.0
+PMV_AIR_VEL = 0.05
+PMV_CENTER_TARGET = -0.2
+PMV_SOLVE_MIN_TA = 15.0
+PMV_SOLVE_MAX_TA = 32.0
+PMV_SOLVE_EPS = 0.01
+
+# AI 모드 half-width around the PMV center, in degrees C -- outside
+# [center - half_width, center + half_width] counts as "AC should be on".
+SENSITIVITY_HALF_WIDTH_C = {"low": 0.7, "normal": 0.5, "high": 0.2}
+DEFAULT_SENSITIVITY = "normal"
+DEFAULT_SLEEP_DELAY_MIN = 10
 
 print("Loading YOLO12n model...")
 model = YOLO("yolo12n.pt")
@@ -65,6 +90,33 @@ def set_led(on: bool) -> None:
     requests.get(f"http://{ESP32_IP}/led/{path}", timeout=5)
 
 
+def set_blue_led(on: bool) -> None:
+    path = "on" if on else "off"
+    requests.get(f"http://{ESP32_IP}/led/blue/{path}", timeout=5)
+
+
+def set_green_led(on: bool) -> None:
+    path = "on" if on else "off"
+    requests.get(f"http://{ESP32_IP}/led/green/{path}", timeout=5)
+
+
+def fetch_settings() -> dict:
+    """Reads the dashboard-controlled settings (AI sensitivity, manual
+    overrides) back from Supabase."""
+    url = (
+        f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
+        "&select=ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_min"
+    )
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    r = requests.get(url, headers=headers, timeout=5)
+    r.raise_for_status()
+    rows = r.json()
+    return rows[0] if rows else {}
+
+
 def is_lying_down(box) -> bool:
     x1, y1, x2, y2 = box.xyxy[0]
     width = float(x2 - x1)
@@ -78,6 +130,8 @@ def update_supabase(
     confidence: float,
     temperature: float | None,
     humidity: float | None,
+    ac_on: bool,
+    sleep_on: bool,
 ) -> None:
     url = f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
     headers = {
@@ -92,6 +146,8 @@ def update_supabase(
         "confidence": confidence,
         "temperature": temperature,
         "humidity": humidity,
+        "ac_on": ac_on,
+        "sleep_on": sleep_on,
         # Postgres only applies "default now()" on INSERT, not UPDATE, so the
         # timestamp has to be set explicitly on every write here.
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -113,6 +169,10 @@ def main():
 
     last_temp = None
     last_humidity = None
+
+    ac_on = False
+    sleep_on = False
+    lying_auto_since = None  # monotonic time when continuous lying started
 
     last_heartbeat = 0.0
 
@@ -187,12 +247,68 @@ def main():
         except (requests.RequestException, ValueError, KeyError) as e:
             print(f"Sensor read failed: {e}")
 
+        settings = {}
+        try:
+            settings = fetch_settings()
+        except (requests.RequestException, ValueError, IndexError) as e:
+            print(f"Settings read failed: {e}")
+
+        sensitivity = settings.get("ai_sensitivity") or DEFAULT_SENSITIVITY
+        sleep_delay_min = settings.get("sleep_delay_min") or DEFAULT_SLEEP_DELAY_MIN
+
+        if settings.get("ac_manual"):
+            new_ac_on = bool(settings.get("ac_on"))
+        elif last_temp is not None and last_humidity is not None:
+            half_width = SENSITIVITY_HALF_WIDTH_C.get(sensitivity, SENSITIVITY_HALF_WIDTH_C[DEFAULT_SENSITIVITY])
+            center = solve_ta_for_target_pmv(
+                PMV_CENTER_TARGET, last_humidity, PMV_AIR_VEL, PMV_MET, PMV_CLO,
+                PMV_SOLVE_MIN_TA, PMV_SOLVE_MAX_TA, PMV_SOLVE_EPS,
+            )
+            new_ac_on = last_temp < center - half_width or last_temp > center + half_width
+        else:
+            new_ac_on = ac_on
+
+        if new_ac_on != ac_on:
+            ac_on = new_ac_on
+            state_changed = True
+            mode = "manual" if settings.get("ac_manual") else "auto"
+            print(f"AC {'ON' if ac_on else 'OFF'} ({mode}) -> blue LED")
+            set_blue_led(ac_on)
+
+        # Tracks how long the person has been lying down continuously, so
+        # sleep mode can auto-trigger after the dashboard's configured delay.
+        if lying_present:
+            if lying_auto_since is None:
+                lying_auto_since = time.monotonic()
+        else:
+            lying_auto_since = None
+
+        if settings.get("sleep_manual"):
+            new_sleep_on = bool(settings.get("sleep_on"))
+        elif (
+            not sleep_on
+            and lying_auto_since is not None
+            and time.monotonic() - lying_auto_since >= sleep_delay_min * 60
+        ):
+            new_sleep_on = True
+        else:
+            new_sleep_on = sleep_on
+
+        if new_sleep_on != sleep_on:
+            sleep_on = new_sleep_on
+            state_changed = True
+            mode = "manual" if settings.get("sleep_manual") else "auto"
+            print(f"Sleep mode {'ON' if sleep_on else 'OFF'} ({mode}) -> green LED")
+            set_green_led(sleep_on)
+
         # Write a heartbeat even when nothing changed, so the dashboard can
         # tell "still watching, nobody there" apart from "server is down".
         now = time.monotonic()
         if state_changed or now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
             last_heartbeat = now
-            update_supabase(person_present, lying_present, best_conf, last_temp, last_humidity)
+            update_supabase(
+                person_present, lying_present, best_conf, last_temp, last_humidity, ac_on, sleep_on
+            )
 
         elapsed = time.monotonic() - loop_start
         time.sleep(max(0.0, POLL_INTERVAL_S - elapsed))

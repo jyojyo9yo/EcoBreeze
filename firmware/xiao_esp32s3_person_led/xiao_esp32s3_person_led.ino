@@ -1,7 +1,9 @@
 // XIAO ESP32S3 Sense: serves camera snapshots and BME280 temperature/humidity
-// readings over a local HTTP server, and lights the onboard LED when told to.
-// The inference server (running YOLO12n, on the same Wi-Fi network) polls
-// /capture and /sensor and calls /led/on or /led/off based on what it sees
+// readings over a local HTTP server, and lights LEDs when told to -- the
+// onboard one for person detection, plus two discrete ones wired to D1
+// (blue, AC-on indicator) and D0 (green, sleep-mode indicator). The
+// inference server (running YOLO12n, on the same Wi-Fi network) polls
+// /capture and /sensor and calls the /led/* endpoints based on what it sees
 // -- see server/person_detect.py.
 //
 // Requires secrets.h (copy secrets.h.example -> secrets.h and fill in real values).
@@ -21,6 +23,14 @@
 // XIAO ESP32S3 onboard user LED: GPIO21, active-LOW
 const int LED_PIN = LED_BUILTIN;
 
+// Discrete LEDs on the XIAO's D0/D1 pins. Assumes standard wiring (GPIO ->
+// resistor -> LED anode -> cathode -> GND), i.e. active-HIGH -- if wired the
+// other way around, swap the HIGH/LOW in setBlueLed/setGreenLed below.
+// (Empirically GPIO2 lights the green LED and GPIO1 lights the blue one --
+// opposite of the nominal D1/D0 assumption -- so wired to match reality.)
+const int LED_BLUE_PIN = 1;
+const int LED_GREEN_PIN = 2;
+
 // BME280 over I2C on the XIAO's default SDA/SCL pins. This has to be a
 // second I2C bus (not the shared `Wire` instance) because the camera's SCCB
 // control bus already occupies the chip's first I2C peripheral -- reusing it
@@ -33,10 +43,22 @@ bool bmeReady = false;
 
 WebServer server(80);
 bool ledOn = false;
+bool blueLedOn = false;
+bool greenLedOn = false;
 
 void setLed(bool on) {
   ledOn = on;
   digitalWrite(LED_PIN, on ? LOW : HIGH);
+}
+
+void setBlueLed(bool on) {
+  blueLedOn = on;
+  digitalWrite(LED_BLUE_PIN, on ? HIGH : LOW);
+}
+
+void setGreenLed(bool on) {
+  greenLedOn = on;
+  digitalWrite(LED_GREEN_PIN, on ? HIGH : LOW);
 }
 
 void setupCamera() {
@@ -113,6 +135,26 @@ void handleLedOff() {
   server.send(200, "text/plain", "0");
 }
 
+void handleBlueLedOn() {
+  setBlueLed(true);
+  server.send(200, "text/plain", "1");
+}
+
+void handleBlueLedOff() {
+  setBlueLed(false);
+  server.send(200, "text/plain", "0");
+}
+
+void handleGreenLedOn() {
+  setGreenLed(true);
+  server.send(200, "text/plain", "1");
+}
+
+void handleGreenLedOff() {
+  setGreenLed(false);
+  server.send(200, "text/plain", "0");
+}
+
 void handleSensor() {
   if (!bmeReady) {
     server.send(503, "application/json", "{\"error\":\"bme280 not found\"}");
@@ -142,6 +184,11 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   setLed(false);
 
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  setBlueLed(false);
+  setGreenLed(false);
+
   setupCamera();
 
   bmeWire.begin(BME_SDA_PIN, BME_SCL_PIN);
@@ -160,6 +207,10 @@ void setup() {
   server.on("/led", handleLedGet);
   server.on("/led/on", handleLedOn);
   server.on("/led/off", handleLedOff);
+  server.on("/led/blue/on", handleBlueLedOn);
+  server.on("/led/blue/off", handleBlueLedOff);
+  server.on("/led/green/on", handleGreenLedOn);
+  server.on("/led/green/off", handleGreenLedOff);
   server.begin();
   Serial.println("HTTP server started");
 }
