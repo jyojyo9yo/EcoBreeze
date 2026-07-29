@@ -5,12 +5,16 @@
 
     const statusEl = document.getElementById("personStatus");
     const updatedAtEl = document.getElementById("personUpdatedAt");
+    const tempEl = document.getElementById("tempValue");
+    const humidityEl = document.getElementById("humidityValue");
 
     function render(row) {
         if (!row) {
             statusEl.textContent = "연결 대기중";
             statusEl.className = "person-status status-offline";
             updatedAtEl.textContent = "";
+            tempEl.textContent = "--°C";
+            humidityEl.textContent = "습도 --%";
             return;
         }
 
@@ -32,12 +36,15 @@
         }
 
         updatedAtEl.textContent = "마지막 업데이트: " + updatedAt.toLocaleTimeString("ko-KR");
+
+        tempEl.textContent = row.temperature != null ? row.temperature.toFixed(1) + "°C" : "--°C";
+        humidityEl.textContent = "습도 " + (row.humidity != null ? row.humidity.toFixed(0) + "%" : "--%");
     }
 
     async function poll(client) {
         const { data, error } = await client
             .from("device_status")
-            .select("person_detected, lying_detected, updated_at")
+            .select("person_detected, lying_detected, temperature, humidity, updated_at")
             .eq("device_id", DEVICE_ID)
             .maybeSingle();
 

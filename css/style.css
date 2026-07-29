@@ -52,6 +52,15 @@ body{
     font-weight:bold;
 }
 
+.humidity{
+
+    color:#c5cbc8;
+
+    font-size:18px;
+
+    margin-top:10px;
+}
+
 .person-card{
 
     margin-top:20px;

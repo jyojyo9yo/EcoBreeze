@@ -1,18 +1,33 @@
-// XIAO ESP32S3 Sense: serves camera snapshots over a local HTTP server and
-// lights the onboard LED when told to. The inference server (running
-// YOLO12n, on the same Wi-Fi network) polls /capture and calls /led/on or
-// /led/off based on what it sees -- see server/person_detect.py.
+// XIAO ESP32S3 Sense: serves camera snapshots and BME280 temperature/humidity
+// readings over a local HTTP server, and lights the onboard LED when told to.
+// The inference server (running YOLO12n, on the same Wi-Fi network) polls
+// /capture and /sensor and calls /led/on or /led/off based on what it sees
+// -- see server/person_detect.py.
 //
 // Requires secrets.h (copy secrets.h.example -> secrets.h and fill in real values).
+// Requires the "Adafruit BME280 Library" (and its "Adafruit Unified Sensor"
+// dependency) installed via Arduino IDE's Library Manager.
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Wire.h>
+#include <Adafruit_BME280.h>
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "secrets.h"
 
 // XIAO ESP32S3 onboard user LED: GPIO21, active-LOW
 const int LED_PIN = LED_BUILTIN;
+
+// BME280 over I2C on the XIAO's default SDA/SCL pins. This has to be a
+// second I2C bus (not the shared `Wire` instance) because the camera's SCCB
+// control bus already occupies the chip's first I2C peripheral -- reusing it
+// here causes Wire.begin() to fail against the camera driver.
+const int BME_SDA_PIN = 5;
+const int BME_SCL_PIN = 6;
+TwoWire bmeWire = TwoWire(1);
+Adafruit_BME280 bme;
+bool bmeReady = false;
 
 WebServer server(80);
 bool ledOn = false;
@@ -96,6 +111,18 @@ void handleLedOff() {
   server.send(200, "text/plain", "0");
 }
 
+void handleSensor() {
+  if (!bmeReady) {
+    server.send(503, "application/json", "{\"error\":\"bme280 not found\"}");
+    return;
+  }
+  float tempC = bme.readTemperature();
+  float humidity = bme.readHumidity();
+  char body[64];
+  snprintf(body, sizeof(body), "{\"temperature\":%.2f,\"humidity\":%.2f}", tempC, humidity);
+  server.send(200, "application/json", body);
+}
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -114,9 +141,15 @@ void setup() {
   setLed(false);
 
   setupCamera();
+
+  bmeWire.begin(BME_SDA_PIN, BME_SCL_PIN);
+  bmeReady = bme.begin(0x76, &bmeWire) || bme.begin(0x77, &bmeWire);
+  Serial.println(bmeReady ? "BME280 ready" : "BME280 not found");
+
   connectWifi();
 
   server.on("/capture", handleCapture);
+  server.on("/sensor", handleSensor);
   server.on("/led", handleLedGet);
   server.on("/led/on", handleLedOn);
   server.on("/led/off", handleLedOff);

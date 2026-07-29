@@ -10,6 +10,8 @@ Setup: pip install -r requirements.txt, then copy .env.example to .env and
 fill in the ESP32's IP + Supabase credentials, then `python person_detect.py`.
 """
 
+from __future__ import annotations
+
 import os
 import time
 from datetime import datetime, timezone
@@ -51,6 +53,13 @@ def fetch_frame():
     return cv2.imdecode(np.frombuffer(r.content, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
+def fetch_sensor():
+    r = requests.get(f"http://{ESP32_IP}/sensor", timeout=5)
+    r.raise_for_status()
+    data = r.json()
+    return float(data["temperature"]), float(data["humidity"])
+
+
 def set_led(on: bool) -> None:
     path = "on" if on else "off"
     requests.get(f"http://{ESP32_IP}/led/{path}", timeout=5)
@@ -63,7 +72,13 @@ def is_lying_down(box) -> bool:
     return height > 0 and (width / height) >= LYING_ASPECT_RATIO_THRESHOLD
 
 
-def update_supabase(person_detected: bool, lying_detected: bool, confidence: float) -> None:
+def update_supabase(
+    person_detected: bool,
+    lying_detected: bool,
+    confidence: float,
+    temperature: float | None,
+    humidity: float | None,
+) -> None:
     url = f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -75,6 +90,8 @@ def update_supabase(person_detected: bool, lying_detected: bool, confidence: flo
         "person_detected": person_detected,
         "lying_detected": lying_detected,
         "confidence": confidence,
+        "temperature": temperature,
+        "humidity": humidity,
         # Postgres only applies "default now()" on INSERT, not UPDATE, so the
         # timestamp has to be set explicitly on every write here.
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -93,6 +110,9 @@ def main():
     lying_present = False
     lying_hit_streak = 0
     lying_miss_streak = 0
+
+    last_temp = None
+    last_humidity = None
 
     last_heartbeat = 0.0
 
@@ -163,12 +183,17 @@ def main():
             state_changed = True
             print("Person standing back up")
 
+        try:
+            last_temp, last_humidity = fetch_sensor()
+        except (requests.RequestException, ValueError, KeyError) as e:
+            print(f"Sensor read failed: {e}")
+
         # Write a heartbeat even when nothing changed, so the dashboard can
         # tell "still watching, nobody there" apart from "server is down".
         now = time.monotonic()
         if state_changed or now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
             last_heartbeat = now
-            update_supabase(person_present, lying_present, best_conf)
+            update_supabase(person_present, lying_present, best_conf, last_temp, last_humidity)
 
         elapsed = time.monotonic() - loop_start
         time.sleep(max(0.0, POLL_INTERVAL_S - elapsed))
