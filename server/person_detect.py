@@ -5,16 +5,23 @@ detected person's bounding-box aspect ratio, and:
   - calls /led/on or /led/off on the board for person presence
   - computes a PMV-based comfort band from the BME280 reading (see pmv.py,
     ported from the raspi/ teammate's comfort-band code) and fires the IR
-    transmitter (D2) when the room is outside it -- unless the dashboard has
+    transmitter when the room is outside it -- unless the dashboard has
     taken manual control, in which case it just mirrors whatever the
     dashboard last set
-  - drives the green LED (D0) once someone has been lying down continuously
-    for longer than the dashboard's configured sleep-mode delay, same
-    manual-override rule
+  - mirrors sleep mode onto the green LED, which also keys out an IR command so
+    the receiver board's green LED follows. Sleep mode turns on either from the
+    dashboard or automatically once someone has been lying down continuously for
+    longer than the configured delay; the LED itself tracks the resulting state
+    unconditionally, with no person-present gate.
   - writes the latest status to Supabase for the web dashboard to poll
 
+The /led/blue/* and /led/green/* endpoints key out IR pulse frames on the board
+rather than lighting a local LED -- see firmware/xiao_esp32s3_person_led for the
+protocol and firmware/ecobreeze_receiver for the decoder.
+
 Setup: pip install -r requirements.txt, then copy .env.example to .env and
-fill in the ESP32's IP + Supabase credentials, then `python person_detect.py`.
+fill in Supabase credentials, then `python person_detect.py`. The camera board
+is found at ecobreeze-cam.local by default, so ESP32_IP is only a fallback.
 """
 
 from __future__ import annotations
@@ -365,13 +372,15 @@ def main():
             mode = "manual" if settings.get("sleep_manual") else "auto"
             print(f"Sleep mode {'ON' if sleep_on else 'OFF'} ({mode})")
 
-        # Sleep mode is a setting (shown as "on" on the dashboard even while
-        # the room is briefly empty), but the physical green LED should only
-        # ever be lit while someone is actually there to see it.
-        new_green_led_on = sleep_on and person_present
+        # Track sleep mode directly, with no person_present gate. The LED used to
+        # light only while someone was detected -- reasonable for a real room, but
+        # it meant toggling sleep mode on the dashboard did nothing visible unless
+        # the camera happened to see a person right then, which is not how you want
+        # to demo a switch.
+        new_green_led_on = sleep_on
         if new_green_led_on != green_led_on:
             green_led_on = new_green_led_on
-            print(f"Green LED {'ON' if green_led_on else 'OFF'} (sleep_on={sleep_on}, person_present={person_present})")
+            print(f"Green LED {'ON' if green_led_on else 'OFF'} (sleep_on={sleep_on})")
             set_green_led(green_led_on)
 
         # Write a heartbeat even when nothing changed, so the dashboard can
