@@ -34,7 +34,15 @@ from pmv import solve_ta_for_target_pmv
 load_dotenv()
 
 DEVICE_ID = os.environ["DEVICE_ID"]
-ESP32_IP = os.environ["ESP32_IP"]
+
+# Camera board address. We try the mDNS name first and fall back to a fixed IP,
+# because the board's DHCP address drifted between sessions and every drift meant
+# editing ESP32_IP in two .env files (this machine and the Pi) before anything
+# worked again. The board advertises itself as ecobreeze-cam.local -- see
+# MDNS_HOSTNAME in firmware/xiao_esp32s3_person_led. ESP32_IP is now optional and
+# only serves as a fallback for networks where mDNS is blocked.
+ESP32_HOST = os.environ.get("ESP32_HOST", "ecobreeze-cam.local")
+ESP32_IP = os.environ.get("ESP32_IP", "")
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
@@ -72,34 +80,88 @@ model = YOLO("yolo12n.pt")
 print("Model loaded")
 
 
+_esp32_target = None
+
+
+def esp32_target() -> str:
+    """Address that the camera board actually answers on, cached once found.
+
+    Probes the mDNS name first, then the fallback IP. Any failed request clears
+    the cache (see esp32_get), so if the board reboots onto a different address
+    the next loop iteration rediscovers it instead of failing forever.
+    """
+    global _esp32_target
+    if _esp32_target:
+        return _esp32_target
+    for candidate in (ESP32_HOST, ESP32_IP):
+        if not candidate:
+            continue
+        try:
+            requests.get(f"http://{candidate}/led", timeout=3)
+        except requests.RequestException:
+            continue
+        _esp32_target = candidate
+        print(f"Camera board reachable at {candidate}")
+        return candidate
+    # Neither answered -- don't cache, so the next call probes again.
+    return ESP32_HOST or ESP32_IP
+
+
+def esp32_get(path: str, timeout: float = 5, check: bool = True):
+    try:
+        r = requests.get(f"http://{esp32_target()}{path}", timeout=timeout)
+        if check:
+            r.raise_for_status()
+        return r
+    except requests.RequestException:
+        global _esp32_target
+        _esp32_target = None      # re-resolve on the next call
+        raise
+
+
 def fetch_frame():
-    r = requests.get(f"http://{ESP32_IP}/capture", timeout=5)
-    r.raise_for_status()
+    r = esp32_get("/capture")
     return cv2.imdecode(np.frombuffer(r.content, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
 def fetch_sensor():
-    r = requests.get(f"http://{ESP32_IP}/sensor", timeout=5)
-    r.raise_for_status()
+    r = esp32_get("/sensor")
     data = r.json()
     return float(data["temperature"]), float(data["humidity"])
 
 
+# The three setters below are fire-and-forget: the caller in the main loop has
+# no except block around them, so they must never raise or one unreachable board
+# would take the whole detection loop down. The IR endpoints get a longer timeout
+# because the board keys out a pulse frame before replying (up to ~1.1s -- see
+# sendPulses in firmware/xiao_esp32s3_person_led).
 def set_led(on: bool) -> None:
     path = "on" if on else "off"
-    requests.get(f"http://{ESP32_IP}/led/{path}", timeout=5)
+    try:
+        esp32_get(f"/led/{path}", check=False)
+    except requests.RequestException as e:
+        print(f"LED set failed: {e}")
 
 
 def set_ac(on: bool) -> None:
-    # Endpoint name is a holdover from when this drove a blue LED directly --
-    # the board now fires an IR transmitter (D2) on the same on/off call.
+    # Endpoint name is a holdover from when this drove a blue LED directly -- the
+    # board now keys out an IR pulse frame (1 = on, 2 = off) on the same call,
+    # which the receiver board turns into its blue compressor LED.
     path = "on" if on else "off"
-    requests.get(f"http://{ESP32_IP}/led/blue/{path}", timeout=5)
+    try:
+        esp32_get(f"/led/blue/{path}", timeout=8, check=False)
+    except requests.RequestException as e:
+        print(f"AC IR send failed: {e}")
 
 
 def set_green_led(on: bool) -> None:
+    # Also keys out an IR pulse frame (5 = sleep on, 6 = sleep off) so the
+    # receiver board's green sleep LED tracks this too.
     path = "on" if on else "off"
-    requests.get(f"http://{ESP32_IP}/led/green/{path}", timeout=5)
+    try:
+        esp32_get(f"/led/green/{path}", timeout=8, check=False)
+    except requests.RequestException as e:
+        print(f"Sleep IR send failed: {e}")
 
 
 def fetch_settings() -> dict:
@@ -179,7 +241,7 @@ def main():
 
     last_heartbeat = 0.0
 
-    print(f"Polling http://{ESP32_IP}/capture every {POLL_INTERVAL_S}s...")
+    print(f"Polling http://{esp32_target()}/capture every {POLL_INTERVAL_S}s...")
     while True:
         loop_start = time.monotonic()
 

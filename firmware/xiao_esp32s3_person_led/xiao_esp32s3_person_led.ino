@@ -10,14 +10,15 @@
 // Manager. (Not "Adafruit BME280 Library": its Adafruit_Sensor dependency
 // redeclares `sensor_t`, which conflicts with the esp32-camera driver's own
 // `sensor_t` typedef and fails to compile.)
-// Also requires "IRremoteESP8266" (David Conran) via Library Manager, for IR
-// transmission -- it supports the ESP32-S3's RMT peripheral out of the box.
+// No IR library is needed: the receiver is a bare photodiode with no
+// demodulator, so we key the IR LED on and off directly (see the protocol note
+// on sendPulses below). "IRremoteESP8266" is no longer required.
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 #include <Wire.h>
 #include <SparkFunBME280.h>
-#include <IRsend.h>
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "secrets.h"
@@ -40,18 +41,37 @@ const int LED_GREEN_PIN = 2;
 // Bench-verified 2026-07-30 with firmware/ir_tx_test: the pin was D2 (GPIO3)
 // before, which is not wired to anything, so the transistor never switched and
 // no IR left the board at all -- the sketch looked fine and emitted nothing.
-// Sends a fixed-address NEC frame that a separate receiver ESP32
-// (ecobreeze_receiver.ino, teammate's board) decodes with IRremote.hpp.
-// Command values must match that sketch's ECOBREEZE_ADDRESS/CMD_* exactly.
-const uint16_t IR_TX_PIN = 4;
-IRsend irsend(IR_TX_PIN);
-const uint16_t NEC_ADDRESS = 0xEB;      // "EcoBreeze"
-const uint16_t NEC_CMD_AC_ON = 0x01;
-const uint16_t NEC_CMD_AC_OFF = 0x02;
-// Sleep mode has no dedicated receiver-side action (just a serial log on
-// the receiver) and no "set" concept of its own yet, so we only fire it on
-// entry -- turning sleep mode off doesn't send anything.
-const uint16_t NEC_CMD_SLEEP_SET = 0x05;
+const uint8_t IR_TX_PIN = 4;
+
+// EcoBreeze optical pulse protocol v1. NEC framing is gone: the receiver is a
+// bare 2-pin photodiode with no demodulator, so it can only report "IR present
+// or not" -- there is no hardware-demodulated signal for IRremote to decode, no
+// matter how correct the transmitter is. So a command is simply that many
+// pulses, and the command value *is* the pulse count. No 38kHz carrier either:
+// with no demodulator, modulating would just halve the received signal.
+//   one pulse = IR on for PULSE_ON_MS, then off for PULSE_GAP_MS
+//   one frame = N pulses, then FRAME_GAP_MS of silence to close the frame
+// These must match firmware/ecobreeze_receiver and raspi/ir_control.py.
+const uint16_t PULSE_ON_MS = 60;
+const uint16_t PULSE_GAP_MS = 60;
+const uint16_t FRAME_GAP_MS = 500;
+
+const uint8_t CMD_AC_ON = 1;
+const uint8_t CMD_AC_OFF = 2;
+const uint8_t CMD_SLEEP_SET = 5;
+const uint8_t CMD_SLEEP_CLEAR = 6;
+
+// Blocks for up to 5*(60+60)+500 = 1.1s. Callers are HTTP handlers, whose
+// client (server/person_detect.py) uses a 5s timeout, so this is within budget.
+void sendPulses(uint8_t count) {
+  for (uint8_t i = 0; i < count; i++) {
+    digitalWrite(IR_TX_PIN, HIGH);
+    delay(PULSE_ON_MS);
+    digitalWrite(IR_TX_PIN, LOW);
+    delay(PULSE_GAP_MS);
+  }
+  delay(FRAME_GAP_MS);
+}
 
 // BME280 over I2C on the XIAO's default SDA/SCL pins. Uses the default
 // `Wire` (I2C peripheral 0) -- confirmed via isolated testing that the
@@ -76,7 +96,7 @@ void setLed(bool on) {
 
 void setAc(bool on) {
   acOn = on;
-  irsend.sendNEC(irsend.encodeNEC(NEC_ADDRESS, on ? NEC_CMD_AC_ON : NEC_CMD_AC_OFF));
+  sendPulses(on ? CMD_AC_ON : CMD_AC_OFF);
 }
 
 void setGreenLed(bool on) {
@@ -170,12 +190,13 @@ void handleBlueLedOff() {
 
 void handleGreenLedOn() {
   setGreenLed(true);
-  irsend.sendNEC(irsend.encodeNEC(NEC_ADDRESS, NEC_CMD_SLEEP_SET));
+  sendPulses(CMD_SLEEP_SET);
   server.send(200, "text/plain", "1");
 }
 
 void handleGreenLedOff() {
   setGreenLed(false);
+  sendPulses(CMD_SLEEP_CLEAR);   // so the receiver board can turn its green LED off too
   server.send(200, "text/plain", "0");
 }
 
@@ -207,6 +228,16 @@ void handleSensor() {
   server.send(200, "application/json", body);
 }
 
+// Advertise ecobreeze-cam.local so server/person_detect.py can find this board
+// by name. The DHCP address drifted between sessions and every drift meant
+// editing ESP32_IP in two separate .env files (dev PC and Pi) before anything
+// worked again. A hand-picked static IP was rejected instead: this network is a
+// /24 whose gateway sits at .173 (a phone hotspot or portable AP), so its DHCP
+// pool is unknown and a fixed address could collide with another device. mDNS
+// already resolves on this network -- the Pi is reachable as jyo.local and has
+// avahi-daemon installed by pi-boot-config.
+const char *MDNS_HOSTNAME = "ecobreeze-cam";
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -216,6 +247,16 @@ void connectWifi() {
     Serial.print(".");
   }
   Serial.printf("\nWiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+
+  // connectWifi() also runs on reconnect, and MDNS.begin() fails if a previous
+  // responder is still registered -- so tear the old one down first.
+  MDNS.end();
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS responder up: http://%s.local\n", MDNS_HOSTNAME);
+  } else {
+    Serial.println("mDNS responder failed to start -- fall back to the raw IP");
+  }
 }
 
 void setup() {
@@ -227,8 +268,9 @@ void setup() {
   pinMode(LED_GREEN_PIN, OUTPUT);
   setGreenLed(false);
 
-  irsend.begin();
-  setAc(false);
+  pinMode(IR_TX_PIN, OUTPUT);
+  digitalWrite(IR_TX_PIN, LOW);
+  setAc(false);   // put the receiver's compressor state in a known place at boot
 
   setupCamera();
 

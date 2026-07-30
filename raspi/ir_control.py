@@ -29,12 +29,37 @@ FRAME_GAP_TIMEOUT_US = 15000  # 이 시간 이상 신호 없으면 한 프레임
 GLITCH_FILTER_US = 100
 MATCH_TOLERANCE = 0.35        # override 판별용 펄스 길이 허용 오차 비율
 
-# ── 대회 시연용 NEC IR 프로토콜 (Pi -> 아두이노+LED) ──────
-# 대회장에 실제 에어컨이 없어 "에어컨 대역"으로 아두이노를 세워 LED로 컴프레서
-# 상태를 보여준다. 아두이노는 IRremote 라이브러리로 표준 NEC 프레임을 그대로
-# 디코딩하면 되므로, 리모컨을 학습할 필요 없이 이 고정 주소/커맨드만 맞추면 된다.
-# (실제 에어컨을 학습해 제어할 땐 기존 learn_button()/send()/send_setpoint()
-#  경로를 쓴다 — 이건 그와 별개의, 데모 전용 경로다.)
+# ── 대회 시연용 광 펄스 프로토콜 v1 (Pi -> 수신기 보드+LED) ──────
+# 대회장에 실제 에어컨이 없어 "에어컨 대역"으로 ESP32 보드를 세워 LED로 컴프레서
+# 상태를 보여준다. (실제 에어컨을 학습해 제어할 땐 기존 learn_button()/send()/
+#  send_setpoint() 경로를 쓴다 — 이건 그와 별개의, 데모 전용 경로다.)
+#
+# 원래는 표준 NEC 프레임을 쏘고 수신기가 IRremote로 디코딩하는 설계였다. 그런데
+# 수신 부품이 3핀 복조 모듈이 아니라 2핀 적외선 포토다이오드(검은 5mm 940nm)라는
+# 것이 실측으로 확인됐다(2026-07-30). 복조기가 없으면 IRremote가 디코딩할 신호가
+# 하드웨어에서 만들어지지 않으므로, 송신이 완벽해도 NEC 경로는 원리상 동작하지
+# 않는다. 그래서 "IR 있음/없음"만 실을 수 있는 채널로 보고, 명령을 펄스 개수로
+# 표현하는 프로토콜로 바꿨다:
+#
+#   펄스 1개 = IR ON 60ms + OFF 60ms
+#   프레임   = 펄스 N개 + 침묵 500ms
+#   명령 값이 그대로 펄스 개수
+#   (1=전원ON, 2=전원OFF, 3=온도▲, 4=온도▼, 5=수면모드ON, 6=수면모드OFF)
+#
+# firmware/ecobreeze_receiver/, firmware/xiao_esp32s3_person_led/ 의 같은 상수와
+# 반드시 일치해야 한다.
+PULSE_ON_S = 0.060
+PULSE_GAP_S = 0.060
+FRAME_GAP_S = 0.500
+PULSE_CMD_COMPRESSOR_ON = 1
+PULSE_CMD_COMPRESSOR_OFF = 2
+PULSE_CMD_TEMP_UP = 3
+PULSE_CMD_TEMP_DOWN = 4
+PULSE_CMD_SLEEP_SET = 5
+PULSE_CMD_SLEEP_CLEAR = 6
+PULSE_MAX_COMMAND = 6
+
+# 아래 NEC 상수는 복조 모듈로 교체할 때를 위해 남겨둔 레거시 경로(send_nec)용이다.
 NEC_ADDRESS = 0xEB            # "EcoBreeze"
 NEC_CMD_COMPRESSOR_ON = 0x01
 NEC_CMD_COMPRESSOR_OFF = 0x02
@@ -202,19 +227,47 @@ class IRControl:
         _, name = candidates[0]
         return self.send(name)
 
-    # ── 대회 시연용: NEC 고정 프로토콜로 아두이노+LED에 직접 송신 ──
+    # ── 대회 시연용: 광 펄스 프로토콜로 수신기 보드에 직접 송신 ──
     def send_nec(self, address: int, command: int) -> bool:
+        """레거시 경로. 수신기가 3핀 복조 모듈(VS1838B/TSOP)일 때만 의미가 있다.
+        현재 수신 부품은 생 포토다이오드라 복조가 없어서 이 프레임은 디코딩되지
+        않는다 — send_pulses()를 쓸 것. 모듈로 교체할 때를 위해 남겨둔다."""
         if self.dry_run:
             print(f"[IR][dry-run] send_nec(addr=0x{address:02X}, cmd=0x{command:02X})")
             return True
         self._transmit(_nec_pulses(address, command))
         return True
 
+    def send_pulses(self, command: int) -> bool:
+        """EcoBreeze 광 펄스 프로토콜 v1로 송신. 명령 값이 그대로 펄스 개수다.
+
+        캐리어 변조를 쓰지 않고 IR LED를 DC로 켰다 끈다(_transmit()과 다른 점) —
+        수신기에 복조기가 없으므로 변조는 수신 신호를 절반으로 깎을 뿐이다.
+        60ms 단위라 pigpio 웨이브 없이 time.sleep()으로도 충분히 정확하다.
+        """
+        if not (1 <= command <= PULSE_MAX_COMMAND):
+            raise ValueError(f"명령 값은 1~{PULSE_MAX_COMMAND} 범위여야 한다: {command}")
+
+        if self.dry_run:
+            print(f"[IR][dry-run] send_pulses(cmd={command}) — 펄스 {command}개")
+            return True
+
+        for _ in range(command):
+            self.pi.write(self.gpio_send, 1)
+            time.sleep(PULSE_ON_S)
+            self.pi.write(self.gpio_send, 0)
+            time.sleep(PULSE_GAP_S)
+        time.sleep(FRAME_GAP_S)   # 이 침묵이 프레임의 끝을 알린다
+        return True
+
     def send_compressor(self, on: bool) -> bool:
-        """컴프레서 on/off를 고정 NEC 커맨드로 송신 — 아두이노가 이걸 받아
-        LED 상태를 지속적으로 갱신한다 (arduino/ecobreeze_receiver.ino 참고)."""
-        cmd = NEC_CMD_COMPRESSOR_ON if on else NEC_CMD_COMPRESSOR_OFF
-        return self.send_nec(NEC_ADDRESS, cmd)
+        """컴프레서 on/off를 광 펄스로 송신 — 수신기 보드가 이걸 받아 파란 LED
+        상태를 지속적으로 갱신한다 (firmware/ecobreeze_receiver/ 참고)."""
+        return self.send_pulses(PULSE_CMD_COMPRESSOR_ON if on else PULSE_CMD_COMPRESSOR_OFF)
+
+    def send_sleep(self, on: bool) -> bool:
+        """수면모드 on/off를 광 펄스로 송신 — 수신기 보드의 초록 LED를 갱신한다."""
+        return self.send_pulses(PULSE_CMD_SLEEP_SET if on else PULSE_CMD_SLEEP_CLEAR)
 
     def _transmit(self, pulses):
         """pulses: [on_us, off_us, on_us, ...]. 짝수 인덱스=IR LED on 구간(캐리어 변조),

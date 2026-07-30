@@ -56,7 +56,8 @@ const IrCommand COMMANDS[] = {
   {0x02, "전원 OFF"},
   {0x03, "온도 1도 상승"},
   {0x04, "온도 1도 하강"},
-  {0x05, "수면모드(목표온도 설정)"},
+  {0x05, "수면모드 ON"},
+  {0x06, "수면모드 OFF"},
 };
 const uint8_t COMMAND_COUNT = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 
@@ -65,6 +66,14 @@ const uint8_t COMMAND_COUNT = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 const uint8_t SWEEP_PINS[] = {D0, D1, D2, D3, D4, D5, D8, D9, D10};
 const char *SWEEP_NAMES[] = {"D0", "D1", "D2", "D3", "D4", "D5", "D8", "D9", "D10"};
 const uint8_t SWEEP_COUNT = sizeof(SWEEP_PINS) / sizeof(SWEEP_PINS[0]);
+
+// EcoBreeze 광 펄스 프로토콜 v1 — 명령 값이 그대로 펄스 개수다. 수신기가 생
+// 포토다이오드라 복조가 없어서 NEC 대신 이걸 쓴다(ecobreeze_receiver.ino 주석 참고).
+// 상수는 ecobreeze_receiver.ino / xiao_esp32s3_person_led.ino / raspi/ir_control.py와
+// 반드시 같아야 한다.
+const uint16_t PULSE_ON_MS = 60;
+const uint16_t PULSE_GAP_MS = 60;
+const uint16_t FRAME_GAP_MS = 500;
 
 const unsigned long AUTO_INTERVAL_MS = 3000;
 bool autoSend = true;
@@ -75,8 +84,10 @@ void printHelp() {
   Serial.println();
   Serial.printf("[IR TX 테스트] 송신 핀 D3(트랜지스터 베이스) = GPIO%u, NEC 주소 0x%02X\n",
                 IR_TX_PIN, NEC_ADDRESS);
-  Serial.println(F("  1~5 : NEC 1회 송신 (1=전원ON 2=전원OFF 3=온도▲ 4=온도▼ 5=수면모드)"));
-  Serial.println(F("  a   : 1~5 순차 송신"));
+  Serial.println(F("  1~6 : 펄스 프로토콜 1프레임"));
+  Serial.println(F("        1=전원ON 2=전원OFF 3=온도▲ 4=온도▼ 5=수면모드ON 6=수면모드OFF"));
+  Serial.println(F("  a   : 펄스 프로토콜 1~6 순차"));
+  Serial.println(F("  N/A : 레거시 NEC 1프레임 / 순차 (복조 모듈 쓸 때만 의미 있음)"));
   Serial.println(F("  b   : 2초간 NEC 연타 (폰 카메라 확인)"));
   Serial.println(F("  c   : 2초간 38kHz 캐리어 (폰 카메라 확인, 가장 잘 보임)"));
   Serial.println(F("  d   : 1.5초 DC 점등 (배선/극성 확인)"));
@@ -87,6 +98,32 @@ void printHelp() {
   Serial.printf("  자동 송신: %s (%lu초 간격)\n", autoSend ? "ON" : "OFF",
                 AUTO_INTERVAL_MS / 1000);
   Serial.println();
+}
+
+// 펄스 개수 프로토콜로 송신. 38kHz 변조 없이 DC로 켠다 — 수신기에 복조기가
+// 없으므로 변조는 수신 신호를 절반으로 깎을 뿐이다.
+void sendPulses(uint8_t count, const char *label) {
+  for (uint8_t i = 0; i < count; i++) {
+    digitalWrite(IR_TX_PIN, HIGH);
+    delay(PULSE_ON_MS);
+    digitalWrite(IR_TX_PIN, LOW);
+    delay(PULSE_GAP_MS);
+  }
+  delay(FRAME_GAP_MS);
+  Serial.printf("[TX] 펄스 %u개 송신 (%s)\n", count, label);
+}
+
+void sendPulseCommand(uint8_t index) {
+  sendPulses(COMMANDS[index].code, COMMANDS[index].label);
+}
+
+void sendAllPulses() {
+  Serial.println(F("[TX] 펄스 프로토콜로 1~5 순차 송신"));
+  for (uint8_t i = 0; i < COMMAND_COUNT; i++) {
+    sendPulseCommand(i);
+    delay(700);   // 프레임 사이를 넉넉히 벌려 수신기가 확실히 나눠 읽게 한다
+  }
+  Serial.println(F("[TX] 순차 송신 끝"));
 }
 
 void sendCommand(uint8_t index) {
@@ -202,10 +239,14 @@ void photoScan() {
 void handleSerial() {
   while (Serial.available()) {
     char c = Serial.read();
-    if (c >= '1' && c <= '5') {
-      sendCommand(c - '1');
-    } else if (c == 'a' || c == 'A') {
-      sendAll();
+    if (c >= '1' && c <= '6') {
+      sendPulseCommand(c - '1');      // 현재 실제 프로토콜(펄스 개수)
+    } else if (c == 'a') {
+      sendAllPulses();
+    } else if (c == 'N') {
+      sendCommand(0);                 // 레거시 NEC 1프레임 — 복조 모듈을 쓸 때만 의미 있음
+    } else if (c == 'A') {
+      sendAll();                      // 레거시 NEC 1~5 순차
     } else if (c == 'b' || c == 'B') {
       burstFrames();
     } else if (c == 'c' || c == 'C') {
@@ -245,8 +286,8 @@ void loop() {
   handleSerial();
 
   if (autoSend && millis() - lastAutoMs >= AUTO_INTERVAL_MS) {
-    lastAutoMs = millis();
-    sendCommand(autoNextIsOn ? 0 : 1);
+    sendPulseCommand(autoNextIsOn ? 0 : 1);
+    lastAutoMs = millis();   // 송신이 1초 가까이 걸리므로 끝난 시점을 기준으로 잡는다
     autoNextIsOn = !autoNextIsOn;
   }
 }
