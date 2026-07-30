@@ -135,8 +135,15 @@ void setupCamera() {
   // serial log with "cam_hal: FB-OVF" and starved outgoing traffic badly
   // enough to stall HTTP responses partway through (same failure mode we
   // hit with MQTT earlier).
+  // Resolution was QQVGA (160x120) because VGA (~15KB/frame) reliably stalled
+  // client.write() partway through. QVGA is the middle ground that was never
+  // actually tried back then, and 160x120 turned out to be the limit on detection
+  // quality -- a person filling the frame only scored ~0.4-0.7, and the
+  // standing/lying aspect ratio sat right on its 1.2 boundary. 4x the pixels for
+  // ~2x the bytes. If transfers start stalling again, drop straight back to
+  // FRAMESIZE_QQVGA; do not go up to VGA, that is the size known to break.
   if (psramFound()) {
-    config.frame_size = FRAMESIZE_QQVGA; // 160x120 -- small, known to transfer reliably
+    config.frame_size = FRAMESIZE_QVGA;  // 320x240
     config.jpeg_quality = 14;
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -166,6 +173,13 @@ void setupCamera() {
   if (s != nullptr) {
     s->set_vflip(s, 1);
     s->set_hmirror(s, 1);
+
+    // Do not "improve" exposure here without measuring. Tried
+    // set_brightness(1) + set_contrast(1) + set_aec2(1) + GAINCEILING_4X to help
+    // in the dim demo room: mean frame brightness *halved* (74 -> 36) and median
+    // person confidence collapsed from 0.61 to 0.14. Enabling aec2 appears to
+    // pick a much shorter exposure here. Reverted. The real lever for this room
+    // is more light on the subject, not sensor knobs.
   }
 }
 
