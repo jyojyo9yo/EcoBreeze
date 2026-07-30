@@ -152,6 +152,20 @@ void setupCamera() {
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
+    return;
+  }
+
+  // The board is mounted upside down on the demo rig, so the sensor rotates the
+  // frame 180 degrees for us (vflip + hmirror together). Doing it here rather
+  // than on the Pi means every consumer of /capture gets an upright image.
+  // This matters more than it looks: YOLO is trained on upright people and its
+  // confidence collapses on inverted frames -- with the camera correctly aimed at
+  // a person but the image upside down, it detected nothing at all. Set both back
+  // to 0 if the board is ever remounted the right way up.
+  sensor_t *s = esp_camera_sensor_get();
+  if (s != nullptr) {
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
   }
 }
 
