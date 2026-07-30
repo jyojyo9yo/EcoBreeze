@@ -1,8 +1,7 @@
 // XIAO ESP32S3 Sense: serves camera snapshots and BME280 temperature/humidity
-// readings over a local HTTP server, and lights LEDs when told to -- the
-// onboard one for person detection, plus two discrete ones wired to D1
-// (blue, AC-on indicator) and D0 (green, sleep-mode indicator). The
-// inference server (running YOLO12n, on the same Wi-Fi network) polls
+// readings over a local HTTP server, lights an LED for person detection and
+// sleep-mode indication, and transmits an IR signal for the AC-on/off state.
+// The inference server (running YOLO12n, on the same Wi-Fi network) polls
 // /capture and /sensor and calls the /led/* endpoints based on what it sees
 // -- see server/person_detect.py.
 //
@@ -11,11 +10,14 @@
 // Manager. (Not "Adafruit BME280 Library": its Adafruit_Sensor dependency
 // redeclares `sensor_t`, which conflicts with the esp32-camera driver's own
 // `sensor_t` typedef and fails to compile.)
+// Also requires "IRremoteESP8266" (David Conran) via Library Manager, for IR
+// transmission -- it supports the ESP32-S3's RMT peripheral out of the box.
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
 #include <SparkFunBME280.h>
+#include <IRsend.h>
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "secrets.h"
@@ -23,13 +25,21 @@
 // XIAO ESP32S3 onboard user LED: GPIO21, active-LOW
 const int LED_PIN = LED_BUILTIN;
 
-// Discrete LEDs on the XIAO's D0/D1 pins. Assumes standard wiring (GPIO ->
-// resistor -> LED anode -> cathode -> GND), i.e. active-HIGH -- if wired the
-// other way around, swap the HIGH/LOW in setBlueLed/setGreenLed below.
-// (Empirically GPIO2 lights the green LED and GPIO1 lights the blue one --
-// opposite of the nominal D1/D0 assumption -- so wired to match reality.)
-const int LED_BLUE_PIN = 1;
+// Green sleep-mode-indicator LED on the XIAO's D1 pin. Assumes standard
+// wiring (GPIO -> resistor -> LED anode -> cathode -> GND), i.e. active-HIGH
+// -- if wired the other way around, swap the HIGH/LOW in setGreenLed below.
+// (Empirically GPIO2 lights the green LED -- opposite of the nominal D1/D0
+// assumption -- so wired to match reality.)
 const int LED_GREEN_PIN = 2;
+
+// IR LED transmitter on D2 (GPIO3) -- replaces the old blue "AC-on" LED.
+// Sends a fixed-address NEC frame (same custom address/command scheme as
+// raspi/ir_control.py's demo protocol) that a receiver ESP32 decodes.
+const uint16_t IR_TX_PIN = 3;
+IRsend irsend(IR_TX_PIN);
+const uint16_t NEC_ADDRESS = 0xEB;      // "EcoBreeze"
+const uint16_t NEC_CMD_AC_ON = 0x01;
+const uint16_t NEC_CMD_AC_OFF = 0x02;
 
 // BME280 over I2C on the XIAO's default SDA/SCL pins. This has to be a
 // second I2C bus (not the shared `Wire` instance) because the camera's SCCB
@@ -43,7 +53,7 @@ bool bmeReady = false;
 
 WebServer server(80);
 bool ledOn = false;
-bool blueLedOn = false;
+bool acOn = false;
 bool greenLedOn = false;
 
 void setLed(bool on) {
@@ -51,9 +61,9 @@ void setLed(bool on) {
   digitalWrite(LED_PIN, on ? LOW : HIGH);
 }
 
-void setBlueLed(bool on) {
-  blueLedOn = on;
-  digitalWrite(LED_BLUE_PIN, on ? HIGH : LOW);
+void setAc(bool on) {
+  acOn = on;
+  irsend.sendNEC(irsend.encodeNEC(NEC_ADDRESS, on ? NEC_CMD_AC_ON : NEC_CMD_AC_OFF));
 }
 
 void setGreenLed(bool on) {
@@ -136,12 +146,12 @@ void handleLedOff() {
 }
 
 void handleBlueLedOn() {
-  setBlueLed(true);
+  setAc(true);
   server.send(200, "text/plain", "1");
 }
 
 void handleBlueLedOff() {
-  setBlueLed(false);
+  setAc(false);
   server.send(200, "text/plain", "0");
 }
 
@@ -184,10 +194,11 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   setLed(false);
 
-  pinMode(LED_BLUE_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
-  setBlueLed(false);
   setGreenLed(false);
+
+  irsend.begin();
+  setAc(false);
 
   setupCamera();
 

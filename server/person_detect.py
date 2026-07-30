@@ -4,8 +4,8 @@ person detection on each frame, classifies standing vs. lying down from the
 detected person's bounding-box aspect ratio, and:
   - calls /led/on or /led/off on the board for person presence
   - computes a PMV-based comfort band from the BME280 reading (see pmv.py,
-    ported from the raspi/ teammate's comfort-band code) and drives the
-    blue LED (D1) when the room is outside it -- unless the dashboard has
+    ported from the raspi/ teammate's comfort-band code) and fires the IR
+    transmitter (D2) when the room is outside it -- unless the dashboard has
     taken manual control, in which case it just mirrors whatever the
     dashboard last set
   - drives the green LED (D0) once someone has been lying down continuously
@@ -90,7 +90,9 @@ def set_led(on: bool) -> None:
     requests.get(f"http://{ESP32_IP}/led/{path}", timeout=5)
 
 
-def set_blue_led(on: bool) -> None:
+def set_ac(on: bool) -> None:
+    # Endpoint name is a holdover from when this drove a blue LED directly --
+    # the board now fires an IR transmitter (D2) on the same on/off call.
     path = "on" if on else "off"
     requests.get(f"http://{ESP32_IP}/led/blue/{path}", timeout=5)
 
@@ -273,8 +275,8 @@ def main():
             ac_on = new_ac_on
             state_changed = True
             mode = "manual" if settings.get("ac_manual") else "auto"
-            print(f"AC {'ON' if ac_on else 'OFF'} ({mode}) -> blue LED")
-            set_blue_led(ac_on)
+            print(f"AC {'ON' if ac_on else 'OFF'} ({mode}) -> IR")
+            set_ac(ac_on)
 
         # Tracks how long the person has been lying down continuously, so
         # sleep mode can auto-trigger after the dashboard's configured delay.
