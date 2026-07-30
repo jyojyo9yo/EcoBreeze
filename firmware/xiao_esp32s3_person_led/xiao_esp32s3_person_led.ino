@@ -33,13 +33,18 @@ const int LED_PIN = LED_BUILTIN;
 const int LED_GREEN_PIN = 2;
 
 // IR LED transmitter on D2 (GPIO3) -- replaces the old blue "AC-on" LED.
-// Sends a fixed-address NEC frame (same custom address/command scheme as
-// raspi/ir_control.py's demo protocol) that a receiver ESP32 decodes.
+// Sends a fixed-address NEC frame that a separate receiver ESP32
+// (ecobreeze_receiver.ino, teammate's board) decodes with IRremote.hpp.
+// Command values must match that sketch's ECOBREEZE_ADDRESS/CMD_* exactly.
 const uint16_t IR_TX_PIN = 3;
 IRsend irsend(IR_TX_PIN);
 const uint16_t NEC_ADDRESS = 0xEB;      // "EcoBreeze"
 const uint16_t NEC_CMD_AC_ON = 0x01;
 const uint16_t NEC_CMD_AC_OFF = 0x02;
+// Sleep mode has no dedicated receiver-side action (just a serial log on
+// the receiver) and no "set" concept of its own yet, so we only fire it on
+// entry -- turning sleep mode off doesn't send anything.
+const uint16_t NEC_CMD_SLEEP_SET = 0x05;
 
 // BME280 over I2C on the XIAO's default SDA/SCL pins. Uses the default
 // `Wire` (I2C peripheral 0) -- confirmed via isolated testing that the
@@ -158,6 +163,7 @@ void handleBlueLedOff() {
 
 void handleGreenLedOn() {
   setGreenLed(true);
+  irsend.sendNEC(irsend.encodeNEC(NEC_ADDRESS, NEC_CMD_SLEEP_SET));
   server.send(200, "text/plain", "1");
 }
 
