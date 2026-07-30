@@ -54,7 +54,14 @@ ESP32_IP = os.environ.get("ESP32_IP", "")
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
-PERSON_CONF_THRESHOLD = float(os.environ.get("PERSON_CONF_THRESHOLD", 0.5))
+# 0.5 was too strict for the 160x120 frames this camera sends. Measured on a live
+# frame with a person clearly in shot, close and well lit: YOLO returned the
+# person at conf=0.401 -- rejected, so nothing was ever detected even though the
+# camera was aimed correctly. Everything else in that frame scored 0.064 or below
+# (a chair, plus a handful of sub-0.03 phantom "person" boxes), so 0.3 clears the
+# real detection with room to spare while still sitting ~5x above the noise. The
+# ON_STREAK=2 requirement filters one-frame flukes on top of that.
+PERSON_CONF_THRESHOLD = float(os.environ.get("PERSON_CONF_THRESHOLD", 0.3))
 # Person box width / height ratio above which we call it "lying down".
 # A standing person's box is much taller than wide (~0.3-0.5); lying down
 # flips that to wider than tall.
