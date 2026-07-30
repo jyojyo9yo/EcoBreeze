@@ -41,13 +41,14 @@ const uint16_t NEC_ADDRESS = 0xEB;      // "EcoBreeze"
 const uint16_t NEC_CMD_AC_ON = 0x01;
 const uint16_t NEC_CMD_AC_OFF = 0x02;
 
-// BME280 over I2C on the XIAO's default SDA/SCL pins. This has to be a
-// second I2C bus (not the shared `Wire` instance) because the camera's SCCB
-// control bus already occupies the chip's first I2C peripheral -- reusing it
-// here causes Wire.begin() to fail against the camera driver.
+// BME280 over I2C on the XIAO's default SDA/SCL pins. Uses the default
+// `Wire` (I2C peripheral 0) -- confirmed via isolated testing that the
+// camera's SCCB control bus occupies peripheral 1, not 0 (the opposite of
+// what an earlier version of this comment assumed). Using TwoWire(1) here
+// silently breaks BME280 detection once the camera is initialized.
 const int BME_SDA_PIN = 5;
 const int BME_SCL_PIN = 6;
-TwoWire bmeWire = TwoWire(1);
+TwoWire &bmeWire = Wire;
 BME280 bme;
 bool bmeReady = false;
 
@@ -165,6 +166,22 @@ void handleGreenLedOff() {
   server.send(200, "text/plain", "0");
 }
 
+void handleI2cScan() {
+  String body = "";
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    bmeWire.beginTransmission(addr);
+    if (bmeWire.endTransmission() == 0) {
+      char line[16];
+      snprintf(line, sizeof(line), "0x%02X\n", addr);
+      body += line;
+    }
+  }
+  if (body.length() == 0) {
+    body = "(no devices found)\n";
+  }
+  server.send(200, "text/plain", body);
+}
+
 void handleSensor() {
   if (!bmeReady) {
     server.send(503, "application/json", "{\"error\":\"bme280 not found\"}");
@@ -215,6 +232,7 @@ void setup() {
 
   server.on("/capture", handleCapture);
   server.on("/sensor", handleSensor);
+  server.on("/i2cscan", handleI2cScan);
   server.on("/led", handleLedGet);
   server.on("/led/on", handleLedOn);
   server.on("/led/off", handleLedOff);
