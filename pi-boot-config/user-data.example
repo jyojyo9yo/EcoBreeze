@@ -105,6 +105,12 @@ write_files:
 
       if [ ! -d EcoBreeze ]; then
         git clone https://github.com/jyojyo9yo/EcoBreeze.git
+      else
+        # 이미 클론돼 있으면 최신 코드를 받아온다. 이게 없으면 재부팅해도 계속
+        # 예전 코드로 돌아서, 코드를 고칠 때마다 SSH로 수동 pull을 해야 했다.
+        # set -e가 걸려 있으므로 실패(네트워크 문제/로컬 수정과 충돌)해도 부팅이
+        # 멈추지 않게 || true로 감싼다 -- 그 경우 기존 코드로 그냥 뜬다.
+        git -C EcoBreeze pull --ff-only || true
       fi
 
       cd EcoBreeze/server
