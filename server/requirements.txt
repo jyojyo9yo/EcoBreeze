@@ -1,4 +1,10 @@
 ultralytics>=8.3.0
+# Pinned: torch>=2.7 SIGILLs during inference (not import/load) on Raspberry
+# Pi 4's Cortex-A72 -- its aarch64 wheels assume ARM dot-product instructions
+# the A72 doesn't have. 2.6.0 is the newest version confirmed working there.
+# torchvision must match (see https://github.com/pytorch/vision#installation).
+torch==2.6.0
+torchvision==0.21.0
 opencv-python-headless
 numpy
 requests
