@@ -241,15 +241,52 @@ void handleSensor() {
 // avahi-daemon installed by pi-boot-config.
 const char *MDNS_HOSTNAME = "ecobreeze-cam";
 
+// How long to wait for one association attempt before starting a fresh one, and
+// how many failed attempts before giving up and rebooting the board.
+const unsigned long WIFI_ATTEMPT_TIMEOUT_MS = 15000;
+const uint8_t WIFI_ATTEMPTS_BEFORE_REBOOT = 4;
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("Connecting to WiFi \"%s\"", WIFI_SSID);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // Power save makes an idle station slow to answer and, on this board, more
+  // likely to miss the AP coming back. It's mains-powered here, so turn it off.
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+
+  // This used to call WiFi.begin() exactly once and then spin forever waiting
+  // for WL_CONNECTED. If that single association didn't take -- which is what
+  // happens when the AP blips, as a phone hotspot does -- the board sat printing
+  // dots for good, never serving HTTP again, and only a physical reset brought
+  // it back. Observed live 2026-07-31: board powered and running, stuck on dots,
+  // gone from the network entirely (no ARP entry), while the Pi stayed
+  // connected to the same SSID; one reset fixed it instantly. So: bound each
+  // attempt, tear the previous one down before retrying, and reboot ourselves if
+  // the AP really is gone -- an unattended demo can't wait for someone to notice.
+  for (uint8_t attempt = 1; ; attempt++) {
+    WiFi.disconnect(true);       // drop any half-finished state from last time
+    delay(100);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("Connecting to WiFi \"%s\" (attempt %u)", WIFI_SSID, attempt);
+
+    unsigned long started = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - started < WIFI_ATTEMPT_TIMEOUT_MS) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      break;
+    }
+    if (attempt >= WIFI_ATTEMPTS_BEFORE_REBOOT) {
+      Serial.println("WiFi still down after repeated attempts -- restarting board");
+      delay(200);
+      ESP.restart();
+    }
   }
-  Serial.printf("\nWiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+
+  Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
 
   // connectWifi() also runs on reconnect, and MDNS.begin() fails if a previous
   // responder is still registered -- so tear the old one down first.
