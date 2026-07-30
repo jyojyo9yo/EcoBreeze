@@ -32,11 +32,18 @@ const int LED_PIN = LED_BUILTIN;
 // assumption -- so wired to match reality.)
 const int LED_GREEN_PIN = 2;
 
-// IR LED transmitter on D2 (GPIO3) -- replaces the old blue "AC-on" LED.
+// IR LED transmitter driven from D3 (GPIO4) -- replaces the old blue "AC-on"
+// LED. The LED is not wired straight to a GPIO: its anode hangs off the 5V rail
+// through a series resistor and its cathode goes to the collector of an NPN
+// low-side switch, whose base D3 feeds through another resistor (emitter to
+// GND). That is active-HIGH, so IRsend's default (inverted=false) is right.
+// Bench-verified 2026-07-30 with firmware/ir_tx_test: the pin was D2 (GPIO3)
+// before, which is not wired to anything, so the transistor never switched and
+// no IR left the board at all -- the sketch looked fine and emitted nothing.
 // Sends a fixed-address NEC frame that a separate receiver ESP32
 // (ecobreeze_receiver.ino, teammate's board) decodes with IRremote.hpp.
 // Command values must match that sketch's ECOBREEZE_ADDRESS/CMD_* exactly.
-const uint16_t IR_TX_PIN = 3;
+const uint16_t IR_TX_PIN = 4;
 IRsend irsend(IR_TX_PIN);
 const uint16_t NEC_ADDRESS = 0xEB;      // "EcoBreeze"
 const uint16_t NEC_CMD_AC_ON = 0x01;
