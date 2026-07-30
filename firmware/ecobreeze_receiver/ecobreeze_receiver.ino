@@ -22,8 +22,9 @@
  *   펄스 1개 = IR ON 60ms + OFF 60ms
  *   프레임   = 펄스 N개 + 침묵 500ms
  *   명령 값이 그대로 펄스 개수다:
- *     1 = 전원 ON   2 = 전원 OFF   3 = 온도▲   4 = 온도▼
- *     5 = 수면모드 ON   6 = 수면모드 OFF
+ *     1 = 전원 ON   2 = 전원 OFF   3 = 수면모드 ON   4 = 수면모드 OFF
+ *   (온도▲/▼는 제외했다 — 시연에서 쓰지 않는데다, 명령 개수를 줄이면 프레임이
+ *    짧아지고 먼 거리에서 펄스를 놓쳤을 때 엉뚱한 명령으로 오인될 여지도 준다.)
  *   송신 측 상수(xiao_esp32s3_person_led.ino, ir_tx_test.ino,
  *   raspi/ir_control.py)와 반드시 같은 값을 써야 한다.
  *
@@ -59,14 +60,16 @@ const uint8_t LED_HEARTBEAT_PIN = 3;    // 실크 D2, 미배선이어도 무해
 
 // 프로토콜 상수 — 송신 측과 같아야 함
 const uint16_t FRAME_END_MS = 250;      // 이 시간 이상 빛이 없으면 프레임 종료
-const uint8_t MAX_PULSES = 8;           // 이보다 많으면 노이즈로 보고 버린다
+// 정의된 명령보다 많이 세이면 노이즈로 보고 버린다. 온도▲/▼를 빼고 명령을
+// 1~4로 줄인 이유가 여기 있다: 펄스가 적을수록 프레임이 짧아 흔들릴 구간이 줄고,
+// 먼 거리에서 펄스 하나를 놓쳐도 남은 개수가 유효 범위를 벗어나 "알 수 없는 명령"
+// 으로 버려질 뿐, 엉뚱한 명령으로 오인되지 않는다.
+const uint8_t MAX_PULSES = 4;
 
 const uint8_t CMD_POWER_ON = 1;
 const uint8_t CMD_POWER_OFF = 2;
-const uint8_t CMD_TEMP_UP = 3;
-const uint8_t CMD_TEMP_DOWN = 4;
-const uint8_t CMD_SLEEP_SET = 5;
-const uint8_t CMD_SLEEP_CLEAR = 6;
+const uint8_t CMD_SLEEP_SET = 3;
+const uint8_t CMD_SLEEP_CLEAR = 4;
 
 const unsigned long HEARTBEAT_INTERVAL_MS = 500;
 
@@ -90,57 +93,80 @@ uint16_t frameMinAdc = 4095;   // 프레임 동안의 최저값 — 임계값까
 const unsigned long BASELINE_REFRESH_MS = 5000;
 const uint16_t BASELINE_MIN_SANE = 500;   // 이보다 낮은 값은 기준값으로 받지 않는다
 uint16_t idleMax = 0;
+uint16_t idleMin = 4095;
 unsigned long lastBaselineRefreshMs = 0;
+
+// 임계값을 노이즈에 바짝 붙였으므로, 단발 스파이크로 상태가 흔들리지 않게
+// 연속으로 이만큼 샘플이 같은 판정을 내야 상태를 바꾼다. 샘플링이 약 21kHz라
+// 8샘플은 0.4ms 남짓이고, 60ms 펄스에는 전혀 지장이 없다.
+const uint8_t DETECT_SAMPLES = 8;
+uint8_t transitionStreak = 0;
 
 bool heartbeatState = false;
 unsigned long lastHeartbeatMs = 0;
 
-void applyBaseline(uint16_t value) {
-  darkBaseline = value;
-  threshOn = (uint16_t)((uint32_t)darkBaseline * 80 / 100);
-  threshOff = (uint16_t)((uint32_t)darkBaseline * 90 / 100);
+// 임계값을 고정 비율이 아니라 "실측 노이즈"에서 뽑는다. 기준값의 80%처럼 고정
+// 비율로 잡으면 신호가 약해지는 먼 거리에서 먼저 놓치는데, 실제 유휴 리플은
+// 기준값의 1~2% 수준이라 그 여유를 통째로 버리는 셈이었다. 리플의 4배(최소 5%)만
+// 떨어지면 감지로 보면 노이즈 대비 마진은 그대로 유지하면서 훨씬 약한 신호까지
+// 잡는다 — 수신 세기는 거리 제곱에 반비례하므로 사거리가 눈에 띄게 늘어난다.
+void applyBaseline(uint16_t baseValue, uint16_t idleFloor) {
+  darkBaseline = baseValue;
+
+  uint16_t ripple = (baseValue > idleFloor) ? (baseValue - idleFloor) : 0;
+  uint32_t margin = (uint32_t)ripple * 4;
+  // 마진을 5~15% 사이로 묶는다. 하한은 노이즈가 0으로 측정돼도 최소 여유를 주기
+  // 위한 것이고, 상한이 더 중요하다 — 리플 추정이 어떤 이유로든 부풀어도 임계값이
+  // 신호가 못 넘을 만큼 올라가 스스로 먹통이 되는 일을 막는다.
+  uint32_t floorMargin = darkBaseline / 20;          // 5%
+  uint32_t ceilMargin = (uint32_t)darkBaseline * 15 / 100;
+  if (margin < floorMargin) margin = floorMargin;
+  if (margin > ceilMargin) margin = ceilMargin;
+
+  threshOn = (uint16_t)(darkBaseline - margin);
+  threshOff = (uint16_t)(darkBaseline - margin / 2);  // 절반만 회복해도 꺼짐(히스테리시스)
 }
 
-// 유휴(빛 없음) 구간의 최대값으로 기준값을 5초마다 갱신한다. 빛이 들어와 있는
-// 동안은 idleMax에 아무것도 쌓이지 않으므로 신호가 기준값을 오염시키지 않는다.
+// 유휴(빛 없음) 구간의 최대/최소값으로 기준값과 노이즈 폭을 5초마다 다시 잡는다.
+// 빛이 들어와 있는 동안은 아무것도 쌓이지 않으므로 신호가 기준값을 오염시키지 않는다.
 void refreshBaselineIfIdle() {
   if (millis() - lastBaselineRefreshMs < BASELINE_REFRESH_MS) {
     return;
   }
   lastBaselineRefreshMs = millis();
 
-  if (idleMax >= BASELINE_MIN_SANE && idleMax != darkBaseline) {
-    // 5% 이상 움직일 때만 로그를 남긴다 (매 5초 스팸 방지)
+  if (idleMax >= BASELINE_MIN_SANE) {
+    // 기준값이 5% 이상 움직일 때만 로그를 남긴다 (매 5초 스팸 방지)
     bool notable = (idleMax > darkBaseline ? idleMax - darkBaseline
                                            : darkBaseline - idleMax) > darkBaseline / 20;
-    applyBaseline(idleMax);
+    applyBaseline(idleMax, idleMin);
     if (notable) {
-      Serial.printf("[EcoBreeze] 기준값 갱신 -> %u, 임계값 on<%u / off>%u\n",
-                    darkBaseline, threshOn, threshOff);
+      Serial.printf("[EcoBreeze] 기준값 갱신 -> %u (리플 %u), 임계값 on<%u / off>%u\n",
+                    darkBaseline, idleMax - idleMin, threshOn, threshOff);
     }
   }
   idleMax = 0;
+  idleMin = 4095;
 }
 
 void measureBaseline() {
-  // 빛이 값을 끌어내리므로 어두울 때의 기준값은 "최대값"이다.
+  // 빛이 값을 끌어내리므로 어두울 때의 기준값은 "최대값"이고, 같은 구간의
+  // "최소값"과의 차이가 곧 유휴 리플(노이즈 폭)이라 임계값 계산에 그대로 쓴다.
   uint16_t maxV = 0;
+  uint16_t minV = 4095;
   unsigned long start = millis();
   while (millis() - start < 300) {
     uint16_t v = analogRead(IR_RECV_PIN);
     if (v > maxV) maxV = v;
+    if (v < minV) minV = v;
   }
-  // 기준값에서 20% 떨어지면 "빛 있음", 10% 이내로 돌아오면 "빛 없음"으로 본다.
-  // 처음엔 50%/75%로 잡았는데 정렬이 약할 때 실측 최저가 2327까지만 내려가
-  // (기준값 4095의 57%) 문턱을 못 넘고 전부 놓쳤다. 어두울 때의 노이즈는
-  // 4035~4095, 즉 ±1.5% 수준이므로 20%면 노이즈 대비 13배 마진이 남는다 —
-  // 감도를 6배 올리면서도 오검출 위험은 사실상 없다 (2026-07-30 실측).
-  applyBaseline(maxV);
+  applyBaseline(maxV, minV);
   idleMax = 0;
+  idleMin = 4095;
   lastBaselineRefreshMs = millis();
 
-  Serial.printf("[EcoBreeze] 기준값(어두울 때)=%u, 임계값 on<%u / off>%u\n",
-                darkBaseline, threshOn, threshOff);
+  Serial.printf("[EcoBreeze] 기준값(어두울 때)=%u, 리플=%u, 임계값 on<%u / off>%u\n",
+                darkBaseline, maxV - minV, threshOn, threshOff);
   if (darkBaseline < 1000) {
     Serial.println(F("[EcoBreeze] 경고: 기준값이 너무 낮다. 100kΩ 바이어스 저항이"
                      " 3.3V와 센스 노드 사이에 연결됐는지, 센스 핀이 맞는지 확인할 것."));
@@ -174,18 +200,30 @@ void loop() {
 void updateIr() {
   uint16_t v = analogRead(IR_RECV_PIN);
   if (v < frameMinAdc) frameMinAdc = v;
-  if (!irPresent && pulseCount == 0 && v > idleMax) {
-    idleMax = v;      // 프레임 중이 아닐 때만 기준값 후보로 쌓는다
+  // 기준값/노이즈 후보는 "프레임 중이 아니고, 임계값보다 위에 있는" 샘플만 쌓는다.
+  // v > threshOn 조건이 핵심이다: 펄스가 막 시작된 순간에는 디바운스 때문에 아직
+  // irPresent가 false라, 이 조건이 없으면 신호의 하강 구간이 노이즈로 기록된다.
+  // 그러면 리플이 부풀고 -> 임계값이 올라가고 -> 그 다음 프레임을 놓치는 되먹임이
+  // 생긴다 (실제로 이것 때문에 첫 프레임만 잡히고 이후가 전부 실패했다).
+  if (!irPresent && pulseCount == 0 && v > threshOn) {
+    if (v > idleMax) idleMax = v;
+    if (v < idleMin) idleMin = v;
   }
   // 빛이 오면 값이 내려간다. 히스테리시스로 경계에서의 떨림을 막는다.
   bool nowPresent = irPresent ? (v < threshOff) : (v < threshOn);
 
   if (nowPresent != irPresent) {
-    irPresent = nowPresent;
-    lastEdgeMs = millis();
-    if (!irPresent && pulseCount < 255) {
-      pulseCount++;               // 빛이 꺼진 순간 = 펄스 하나가 끝난 것
+    // 연속 DETECT_SAMPLES개가 같은 판정을 내야 실제로 상태를 바꾼다
+    if (++transitionStreak >= DETECT_SAMPLES) {
+      transitionStreak = 0;
+      irPresent = nowPresent;
+      lastEdgeMs = millis();
+      if (!irPresent && pulseCount < 255) {
+        pulseCount++;             // 빛이 꺼진 순간 = 펄스 하나가 끝난 것
+      }
     }
+  } else {
+    transitionStreak = 0;
   }
 
   if (pulseCount > 0 && !irPresent && millis() - lastEdgeMs > FRAME_END_MS) {
@@ -218,12 +256,6 @@ void handleFrame(uint8_t pulses) {
       compressorOn = false;
       digitalWrite(LED_COMPRESSOR_PIN, LOW);
       Serial.println(F("[EcoBreeze] 전원 OFF 수신 -> LED 끔"));
-      break;
-    case CMD_TEMP_UP:
-      Serial.println(F("[EcoBreeze] 온도 1도 상승 신호 수신"));
-      break;
-    case CMD_TEMP_DOWN:
-      Serial.println(F("[EcoBreeze] 온도 1도 하강 신호 수신"));
       break;
     case CMD_SLEEP_SET:
       sleepOn = true;

@@ -56,10 +56,13 @@ const uint16_t PULSE_ON_MS = 60;
 const uint16_t PULSE_GAP_MS = 60;
 const uint16_t FRAME_GAP_MS = 500;
 
+// Temp up/down commands were dropped: nothing in the demo sends them, and fewer
+// commands means shorter frames and less room for a dropped pulse at range to be
+// misread as a different command.
 const uint8_t CMD_AC_ON = 1;
 const uint8_t CMD_AC_OFF = 2;
-const uint8_t CMD_SLEEP_SET = 5;
-const uint8_t CMD_SLEEP_CLEAR = 6;
+const uint8_t CMD_SLEEP_SET = 3;
+const uint8_t CMD_SLEEP_CLEAR = 4;
 
 // Blocks for up to 5*(60+60)+500 = 1.1s. Callers are HTTP handlers, whose
 // client (server/person_detect.py) uses a 5s timeout, so this is within budget.

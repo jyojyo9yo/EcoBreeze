@@ -24,8 +24,9 @@
  * 카메라로 볼 것 — 전면은 필터가 약해서 보라/흰색 깜빡임이 잘 잡힌다.
  *
  * 시리얼 모니터(115200) 명령:
- *   1~5 : NEC 프레임 1회 송신 (1=전원ON 2=전원OFF 3=온도▲ 4=온도▼ 5=수면모드)
- *   a   : 1~5를 1초 간격으로 전부 송신 (수신기 쪽 로그 확인용)
+ *   1~4 : 펄스 프로토콜 1프레임 (1=전원ON 2=전원OFF 3=수면모드ON 4=수면모드OFF)
+ *   a   : 1~4를 순차 송신 (수신기 쪽 로그 확인용)
+ *   N/A : 레거시 NEC 1프레임 / 순차 — 3핀 복조 모듈로 바꿀 때만 의미 있음
  *   b   : 2초간 NEC 프레임 연타 — 폰 카메라로 깜빡임 확인
  *   c   : 2초간 38kHz 캐리어 연속 송출 — 폰 카메라로 가장 확실하게 보임
  *   d   : 1.5초간 변조 없이 DC로 점등 — 배선/극성 확인용 (저항 없이 길게 켜지 말 것)
@@ -54,10 +55,8 @@ struct IrCommand {
 const IrCommand COMMANDS[] = {
   {0x01, "전원 ON"},
   {0x02, "전원 OFF"},
-  {0x03, "온도 1도 상승"},
-  {0x04, "온도 1도 하강"},
-  {0x05, "수면모드 ON"},
-  {0x06, "수면모드 OFF"},
+  {0x03, "수면모드 ON"},
+  {0x04, "수면모드 OFF"},
 };
 const uint8_t COMMAND_COUNT = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 
@@ -84,9 +83,9 @@ void printHelp() {
   Serial.println();
   Serial.printf("[IR TX 테스트] 송신 핀 D3(트랜지스터 베이스) = GPIO%u, NEC 주소 0x%02X\n",
                 IR_TX_PIN, NEC_ADDRESS);
-  Serial.println(F("  1~6 : 펄스 프로토콜 1프레임"));
-  Serial.println(F("        1=전원ON 2=전원OFF 3=온도▲ 4=온도▼ 5=수면모드ON 6=수면모드OFF"));
-  Serial.println(F("  a   : 펄스 프로토콜 1~6 순차"));
+  Serial.println(F("  1~4 : 펄스 프로토콜 1프레임"));
+  Serial.println(F("        1=전원ON 2=전원OFF 3=수면모드ON 4=수면모드OFF"));
+  Serial.println(F("  a   : 펄스 프로토콜 1~4 순차"));
   Serial.println(F("  N/A : 레거시 NEC 1프레임 / 순차 (복조 모듈 쓸 때만 의미 있음)"));
   Serial.println(F("  b   : 2초간 NEC 연타 (폰 카메라 확인)"));
   Serial.println(F("  c   : 2초간 38kHz 캐리어 (폰 카메라 확인, 가장 잘 보임)"));
@@ -239,7 +238,7 @@ void photoScan() {
 void handleSerial() {
   while (Serial.available()) {
     char c = Serial.read();
-    if (c >= '1' && c <= '6') {
+    if (c >= '1' && c <= '4') {
       sendPulseCommand(c - '1');      // 현재 실제 프로토콜(펄스 개수)
     } else if (c == 'a') {
       sendAllPulses();

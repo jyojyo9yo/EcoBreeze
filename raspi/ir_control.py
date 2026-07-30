@@ -44,7 +44,11 @@ MATCH_TOLERANCE = 0.35        # override 판별용 펄스 길이 허용 오차 �
 #   펄스 1개 = IR ON 60ms + OFF 60ms
 #   프레임   = 펄스 N개 + 침묵 500ms
 #   명령 값이 그대로 펄스 개수
-#   (1=전원ON, 2=전원OFF, 3=온도▲, 4=온도▼, 5=수면모드ON, 6=수면모드OFF)
+#   (1=전원ON, 2=전원OFF, 3=수면모드ON, 4=수면모드OFF)
+#
+# 온도▲/▼는 뺐다 — 시연에서 쓰지 않는데다, 명령 개수를 줄이면 프레임이 짧아지고
+# 먼 거리에서 펄스를 하나 놓쳐도 남은 개수가 유효 범위를 벗어나 버려질 뿐
+# 엉뚱한 명령으로 오인되지 않는다.
 #
 # firmware/ecobreeze_receiver/, firmware/xiao_esp32s3_person_led/ 의 같은 상수와
 # 반드시 일치해야 한다.
@@ -53,11 +57,9 @@ PULSE_GAP_S = 0.060
 FRAME_GAP_S = 0.500
 PULSE_CMD_COMPRESSOR_ON = 1
 PULSE_CMD_COMPRESSOR_OFF = 2
-PULSE_CMD_TEMP_UP = 3
-PULSE_CMD_TEMP_DOWN = 4
-PULSE_CMD_SLEEP_SET = 5
-PULSE_CMD_SLEEP_CLEAR = 6
-PULSE_MAX_COMMAND = 6
+PULSE_CMD_SLEEP_SET = 3
+PULSE_CMD_SLEEP_CLEAR = 4
+PULSE_MAX_COMMAND = 4
 
 # 아래 NEC 상수는 복조 모듈로 교체할 때를 위해 남겨둔 레거시 경로(send_nec)용이다.
 NEC_ADDRESS = 0xEB            # "EcoBreeze"
