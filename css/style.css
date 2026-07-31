@@ -455,6 +455,144 @@ h1{
     background:#16b98a;
 }
 
+/* ---------------- 카메라 위치 조정 ---------------- */
+
+.modal-box-wide{
+
+    width:420px;
+
+    max-width:92vw;
+}
+
+.camera-view{
+
+    position:relative;
+
+    margin-top:20px;
+
+    /* 보드는 QVGA(320x240)로 보낸다. 비율을 고정해두면 첫 프레임이 도착할 때
+       모달 높이가 튀지 않는다. */
+    aspect-ratio:4 / 3;
+
+    background:#10261F;
+
+    border-radius:14px;
+
+    overflow:hidden;
+}
+
+.camera-frame{
+
+    width:100%;
+
+    height:100%;
+
+    object-fit:contain;
+
+    display:block;
+}
+
+.camera-placeholder{
+
+    position:absolute;
+
+    inset:0;
+
+    display:flex;
+
+    justify-content:center;
+
+    align-items:center;
+
+    color:#6b7d76;
+
+    font-size:15px;
+}
+
+.camera-frame.hidden,
+.camera-placeholder.hidden{
+
+    display:none;
+}
+
+.camera-status{
+
+    margin-top:12px;
+
+    font-size:12px;
+
+    color:#777;
+
+    min-height:30px;
+
+    line-height:1.4;
+}
+
+.camera-status-ok{
+
+    color:#20D6A0;
+}
+
+.camera-status-error{
+
+    color:#e74c3c;
+}
+
+.camera-host-row{
+
+    display:flex;
+
+    gap:8px;
+
+    margin-top:6px;
+}
+
+.camera-host-input{
+
+    flex:1;
+
+    padding:10px 12px;
+
+    border:1px solid #ddd;
+
+    border-radius:10px;
+
+    font-size:13px;
+
+    outline:none;
+
+    min-width:0;
+}
+
+.camera-host-input:focus{
+
+    border-color:#20D6A0;
+}
+
+.camera-host-btn{
+
+    padding:10px 18px;
+
+    border:2px solid #20D6A0;
+
+    border-radius:10px;
+
+    background:white;
+
+    color:#20D6A0;
+
+    font-size:13px;
+
+    font-weight:bold;
+
+    cursor:pointer;
+}
+
+.camera-host-btn:hover{
+
+    background:#eafbf5;
+}
+
 /* ---------------- 로그인 ---------------- */
 
 .login-box{
