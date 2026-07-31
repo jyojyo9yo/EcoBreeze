@@ -45,6 +45,7 @@
         <button id="acModeBtn" class="mode-btn">에어컨</button>
         <button id="sleepModeBtn" class="mode-btn">수면 모드</button>
         <button id="aiModeBtn" class="mode-btn">AI 모드</button>
+        <button id="absenceModeBtn" class="mode-btn">재실 감지</button>
         <button id="cameraModeBtn" class="mode-btn">카메라</button>
     </div>
 
@@ -143,6 +144,46 @@
 
 </div>
 
+<div id="absenceModal" class="modal-overlay hidden">
+
+    <div class="modal-box">
+
+        <div class="modal-title">재실 감지</div>
+
+        <div class="modal-subtitle">사람이 없으면 에어컨을 자동으로 끕니다</div>
+
+        <div class="toggle-row">
+            <span id="absenceStatusLabel" class="status-label">꺼짐</span>
+            <button id="absenceToggleBtn" class="toggle-btn off">OFF</button>
+        </div>
+
+        <div class="setting-row">
+            <span class="setting-label">사람 없을 때 대기</span>
+            <div class="stepper">
+                <button id="absenceDelayDownBtn" class="stepper-btn">-</button>
+                <span id="absenceDelayValue" class="setting-value">30분</span>
+                <button id="absenceDelayUpBtn" class="stepper-btn">+</button>
+            </div>
+        </div>
+
+        <div class="setting-row">
+            <span class="setting-label">시간 단위</span>
+            <div class="unit-toggle">
+                <button id="absenceUnitMinBtn" class="unit-btn">분</button>
+                <button id="absenceUnitSecBtn" class="unit-btn">초</button>
+            </div>
+        </div>
+
+        <div id="absenceNote" class="auto-note"></div>
+
+        <div class="modal-actions">
+            <button id="absenceModalClose" class="modal-btn-primary">닫기</button>
+        </div>
+
+    </div>
+
+</div>
+
 <div id="cameraModal" class="modal-overlay hidden">
 
     <div class="modal-box modal-box-wide">
@@ -179,6 +220,7 @@
 <script src="js/acControl.js"></script>
 <script src="js/sleepMode.js"></script>
 <script src="js/aiMode.js"></script>
+<script src="js/occupancy.js"></script>
 <script src="js/cameraView.js"></script>
 
 </body>

@@ -50,7 +50,8 @@
             .from("device_status")
             .select(
                 "person_detected, lying_detected, temperature, humidity, updated_at," +
-                    "ai_sensitivity, ac_on, ac_manual, sleep_on, sleep_manual, sleep_delay_sec"
+                    "ai_sensitivity, ac_on, ac_manual, sleep_on, sleep_manual, sleep_delay_sec," +
+                    "absence_enabled, absence_delay_sec"
             )
             .eq("device_id", DEVICE_ID)
             .maybeSingle();

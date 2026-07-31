@@ -8,6 +8,13 @@ detected person's bounding-box aspect ratio, and:
     transmitter when the room is outside it -- unless the dashboard has
     taken manual control, in which case it just mirrors whatever the
     dashboard last set
+  - shuts the AC off entirely once nobody has been detected for longer than
+    the dashboard's absence delay, if that feature is switched on. This one
+    overrides manual control, because an empty room should not be cooled no
+    matter what the dashboard last set. Note the AC does not come back by
+    itself when someone returns: the shutoff is written straight back to
+    ac_on (see update_supabase), so the manual "on" the dashboard had set is
+    already gone by then and the user has to switch it on again.
   - mirrors sleep mode onto the green LED, which also keys out an IR command so
     the receiver board's green LED follows. Sleep mode turns on either from the
     dashboard or automatically once someone has been lying down for longer than
@@ -94,6 +101,7 @@ PMV_SOLVE_EPS = 0.01
 SENSITIVITY_HALF_WIDTH_C = {"low": 0.7, "normal": 0.5, "high": 0.2}
 DEFAULT_SENSITIVITY = "normal"
 DEFAULT_SLEEP_DELAY_SEC = 600
+DEFAULT_ABSENCE_DELAY_SEC = 1800
 
 print("Loading YOLO12n model...")
 model = YOLO("yolo12n.pt")
@@ -184,18 +192,39 @@ def set_green_led(on: bool) -> None:
         print(f"Sleep IR send failed: {e}")
 
 
+_SETTINGS_BASE = "ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_sec"
+_SETTINGS_ABSENCE = ",absence_enabled,absence_delay_sec"
+
+# Dropped to _SETTINGS_BASE the first time Supabase says it has no absence
+# columns, so we stop re-asking for them every loop.
+_settings_select = _SETTINGS_BASE + _SETTINGS_ABSENCE
+
+
 def fetch_settings() -> dict:
     """Reads the dashboard-controlled settings (AI sensitivity, manual
-    overrides) back from Supabase."""
-    url = (
-        f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}"
-        "&select=ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_sec"
-    )
+    overrides) back from Supabase.
+
+    Retries without the absence columns if they are missing. PostgREST fails
+    the *whole* query with a 400 when a single selected column does not exist,
+    so pulling this code onto a device before running the migration in
+    supabase_setup.sql would otherwise take AC manual control, sleep mode and
+    the AI sensitivity down with it, rather than just leaving absence auto-off
+    switched off.
+    """
+    global _settings_select
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     }
-    r = requests.get(url, headers=headers, timeout=5)
+    base = f"{SUPABASE_URL}/rest/v1/device_status?device_id=eq.{DEVICE_ID}&select="
+    r = requests.get(base + _settings_select, headers=headers, timeout=5)
+    if r.status_code == 400 and _settings_select != _SETTINGS_BASE:
+        print(
+            "Supabase has no absence_enabled/absence_delay_sec columns -- run "
+            "server/supabase_setup.sql. Absence auto-off stays off until then."
+        )
+        _settings_select = _SETTINGS_BASE
+        r = requests.get(base + _settings_select, headers=headers, timeout=5)
     r.raise_for_status()
     rows = r.json()
     return rows[0] if rows else {}
@@ -259,6 +288,7 @@ def main():
     green_led_on = False
     lying_auto_since = None  # monotonic time when the lying stretch started
     lying_last_seen = 0.0    # monotonic time of the most recent lying frame
+    absent_since = None      # monotonic time when the room last went empty
 
     last_heartbeat = 0.0
 
@@ -349,8 +379,40 @@ def main():
 
         sensitivity = settings.get("ai_sensitivity") or DEFAULT_SENSITIVITY
         sleep_delay_sec = settings.get("sleep_delay_sec") or DEFAULT_SLEEP_DELAY_SEC
+        absence_delay_sec = settings.get("absence_delay_sec") or DEFAULT_ABSENCE_DELAY_SEC
 
-        if settings.get("ac_manual"):
+        now_mono = time.monotonic()
+
+        # Tracks how long nobody has been detected, so the AC can be shut off
+        # after the dashboard's configured delay. person_present is already
+        # debounced by OFF_STREAK, and any detection at all restarts the clock,
+        # so the short detection dropouts this camera produces do not add up to
+        # a false "room is empty" as long as the delay is more than a few
+        # seconds.
+        if person_present:
+            absent_since = None
+        elif absent_since is None:
+            absent_since = now_mono
+
+        absence_expired = (
+            bool(settings.get("absence_enabled"))
+            and absent_since is not None
+            and now_mono - absent_since >= absence_delay_sec
+        )
+
+        # Deliberately ahead of ac_manual: the feature exists so an empty room
+        # does not get cooled, which means it has to win over whatever the
+        # dashboard last set by hand.
+        #
+        # This is one-way. Once it fires, update_supabase writes the resulting
+        # ac_on=false back to the same column the ac_manual branch below reads,
+        # so a returning person does not get the AC back -- the manual "on" has
+        # already been overwritten, and the dashboard has to switch it on
+        # again. Measured live: after "AC OFF (absence >20s)" the next
+        # "Person detected" produced no AC ON.
+        if absence_expired:
+            new_ac_on = False
+        elif settings.get("ac_manual"):
             new_ac_on = bool(settings.get("ac_on"))
         elif last_temp is not None and last_humidity is not None:
             half_width = SENSITIVITY_HALF_WIDTH_C.get(sensitivity, SENSITIVITY_HALF_WIDTH_C[DEFAULT_SENSITIVITY])
@@ -365,7 +427,12 @@ def main():
         if new_ac_on != ac_on:
             ac_on = new_ac_on
             state_changed = True
-            mode = "manual" if settings.get("ac_manual") else "auto"
+            if absence_expired:
+                mode = f"absence >{absence_delay_sec}s"
+            elif settings.get("ac_manual"):
+                mode = "manual"
+            else:
+                mode = "auto"
             print(f"AC {'ON' if ac_on else 'OFF'} ({mode}) -> IR")
             set_ac(ac_on)
 
@@ -377,7 +444,6 @@ def main():
         # frame meant the count restarted every few seconds and could never
         # reach a delay measured in minutes. Anyone who actually gets up and
         # leaves still clears it, just LYING_GRACE_S later.
-        now_mono = time.monotonic()
         if lying_present:
             if lying_auto_since is None:
                 lying_auto_since = now_mono

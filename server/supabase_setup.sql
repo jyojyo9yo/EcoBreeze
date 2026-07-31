@@ -14,6 +14,8 @@ create table if not exists device_status (
   sleep_on boolean not null default false,
   sleep_manual boolean not null default false,
   sleep_delay_sec integer not null default 600,
+  absence_enabled boolean not null default false,
+  absence_delay_sec integer not null default 1800,
   updated_at timestamptz not null default now()
 );
 
@@ -37,6 +39,17 @@ alter table device_status add column if not exists ac_manual boolean not null de
 alter table device_status add column if not exists sleep_on boolean not null default false;
 alter table device_status add column if not exists sleep_manual boolean not null default false;
 alter table device_status add column if not exists sleep_delay_sec integer not null default 600;
+
+-- If the table already existed from before absence auto-off was added:
+-- absence_enabled is the dashboard's on/off switch for the feature itself (not
+-- an output state like ac_on), and absence_delay_sec is how long nobody may be
+-- detected before person_detect.py forces the AC off. Note this one overrides
+-- ac_manual: the point of the feature is that an empty room does not get
+-- cooled, so it wins over whatever the dashboard last set by hand. It is
+-- one-way -- the shutoff is written back to ac_on, so someone coming back does
+-- not get the AC returned to them; the dashboard has to switch it on again.
+alter table device_status add column if not exists absence_enabled boolean not null default false;
+alter table device_status add column if not exists absence_delay_sec integer not null default 1800;
 
 -- One-time migration if the table still has the old sleep_delay_min (minutes)
 -- column from an earlier version of this schema (replaced by sleep_delay_sec
