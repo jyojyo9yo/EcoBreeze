@@ -10,8 +10,10 @@ detected person's bounding-box aspect ratio, and:
     dashboard last set
   - mirrors sleep mode onto the green LED, which also keys out an IR command so
     the receiver board's green LED follows. Sleep mode turns on either from the
-    dashboard or automatically once someone has been lying down continuously for
-    longer than the configured delay; the LED itself tracks the resulting state
+    dashboard or automatically once someone has been lying down for longer than
+    the configured delay -- tolerating detection gaps of up to LYING_GRACE_S,
+    since YOLO drops a lying person often enough that a strict "continuously"
+    never accumulates minutes; the LED itself tracks the resulting state
     unconditionally, with no person-present gate.
   - writes the latest status to Supabase for the web dashboard to poll
 
@@ -66,6 +68,10 @@ PERSON_CONF_THRESHOLD = float(os.environ.get("PERSON_CONF_THRESHOLD", 0.3))
 # A standing person's box is much taller than wide (~0.3-0.5); lying down
 # flips that to wider than tall.
 LYING_ASPECT_RATIO_THRESHOLD = float(os.environ.get("LYING_ASPECT_RATIO_THRESHOLD", 1.2))
+# How long a break in the lying detection can last before the auto-sleep
+# elapsed-time count gives up and restarts. ~13 frames at the default poll
+# interval; the longest gap seen in a live lying test was 4.5s.
+LYING_GRACE_S = float(os.environ.get("LYING_GRACE_S", 20))
 ON_STREAK = int(os.environ.get("ON_STREAK", 2))
 OFF_STREAK = int(os.environ.get("OFF_STREAK", 3))
 HEARTBEAT_INTERVAL_S = float(os.environ.get("HEARTBEAT_INTERVAL_S", 5))
@@ -251,7 +257,8 @@ def main():
     ac_on = False
     sleep_on = False
     green_led_on = False
-    lying_auto_since = None  # monotonic time when continuous lying started
+    lying_auto_since = None  # monotonic time when the lying stretch started
+    lying_last_seen = 0.0    # monotonic time of the most recent lying frame
 
     last_heartbeat = 0.0
 
@@ -306,12 +313,20 @@ def main():
             set_led(False)
 
         if not person_present:
-            # Can't be lying down if nobody's there.
+            # Can't be lying down if nobody's there -- but leave the streaks
+            # alone. Zeroing them here threw away the first lying frame after
+            # every person-detection dropout: person_present needs ON_STREAK
+            # frames to come back, and this reset fired on each of those
+            # frames, so the lying streak could not start counting until the
+            # person had already been re-acquired. Measured on a live test
+            # where someone lay down and the detection blinked out: lying
+            # frames arrived at 30.5s and 32.0s but "lying" only latched at
+            # 39.5s, on the *next* pair. lying_now is already gated on
+            # person_in_frame, so frames with nobody in them still count as
+            # misses and a real departure still clears the streak.
             if lying_present:
                 state_changed = True
             lying_present = False
-            lying_hit_streak = 0
-            lying_miss_streak = 0
         elif not lying_present and lying_hit_streak >= ON_STREAK:
             lying_present = True
             state_changed = True
@@ -354,12 +369,20 @@ def main():
             print(f"AC {'ON' if ac_on else 'OFF'} ({mode}) -> IR")
             set_ac(ac_on)
 
-        # Tracks how long the person has been lying down continuously, so
-        # sleep mode can auto-trigger after the dashboard's configured delay.
+        # Tracks how long the person has been lying down, so sleep mode can
+        # auto-trigger after the dashboard's configured delay. The elapsed
+        # count survives gaps of up to LYING_GRACE_S: YOLO loses a lying
+        # person far more often than a standing one (conf drops from ~0.85 to
+        # ~0.30 once they're horizontal), and resetting on the first missed
+        # frame meant the count restarted every few seconds and could never
+        # reach a delay measured in minutes. Anyone who actually gets up and
+        # leaves still clears it, just LYING_GRACE_S later.
+        now_mono = time.monotonic()
         if lying_present:
             if lying_auto_since is None:
-                lying_auto_since = time.monotonic()
-        else:
+                lying_auto_since = now_mono
+            lying_last_seen = now_mono
+        elif lying_auto_since is not None and now_mono - lying_last_seen > LYING_GRACE_S:
             lying_auto_since = None
 
         if settings.get("sleep_manual"):
@@ -367,7 +390,7 @@ def main():
         elif (
             not sleep_on
             and lying_auto_since is not None
-            and time.monotonic() - lying_auto_since >= sleep_delay_sec
+            and now_mono - lying_auto_since >= sleep_delay_sec
         ):
             new_sleep_on = True
         else:
