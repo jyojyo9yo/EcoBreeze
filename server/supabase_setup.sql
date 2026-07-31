@@ -16,6 +16,7 @@ create table if not exists device_status (
   sleep_delay_sec integer not null default 600,
   absence_enabled boolean not null default false,
   absence_delay_sec integer not null default 1800,
+  sleep_auto_enabled boolean not null default false,
   updated_at timestamptz not null default now()
 );
 
@@ -50,6 +51,14 @@ alter table device_status add column if not exists sleep_delay_sec integer not n
 -- not get the AC returned to them; the dashboard has to switch it on again.
 alter table device_status add column if not exists absence_enabled boolean not null default false;
 alter table device_status add column if not exists absence_delay_sec integer not null default 1800;
+
+-- If the table already existed from before auto-sleep got its own switch:
+-- sleep_auto_enabled turns on "switch sleep mode on by itself once someone has
+-- been lying down for sleep_delay_sec". This used to be implicit -- it ran
+-- whenever sleep_manual was false -- which meant the first dashboard toggle
+-- latched sleep_manual true for good and killed the automatic trigger with no
+-- way back short of editing this column by hand.
+alter table device_status add column if not exists sleep_auto_enabled boolean not null default false;
 
 -- One-time migration if the table still has the old sleep_delay_min (minutes)
 -- column from an earlier version of this schema (replaced by sleep_delay_sec

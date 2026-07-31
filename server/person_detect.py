@@ -17,10 +17,12 @@ detected person's bounding-box aspect ratio, and:
     already gone by then and the user has to switch it on again.
   - mirrors sleep mode onto the green LED, which also keys out an IR command so
     the receiver board's green LED follows. Sleep mode turns on either from the
-    dashboard or automatically once someone has been lying down for longer than
-    the configured delay -- tolerating detection gaps of up to LYING_GRACE_S,
-    since YOLO drops a lying person often enough that a strict "continuously"
-    never accumulates minutes; the LED itself tracks the resulting state
+    dashboard or, when sleep_auto_enabled is set, automatically once someone has
+    been lying down for longer than the configured delay -- tolerating detection
+    gaps of up to LYING_GRACE_S, since YOLO drops a lying person often enough
+    that a strict "continuously" never accumulates minutes. The automatic
+    trigger fires once per lying stretch, so switching sleep back off by hand
+    does not have it come straight back on; the LED itself tracks the resulting state
     unconditionally, with no person-present gate.
   - writes the latest status to Supabase for the web dashboard to poll
 
@@ -193,23 +195,23 @@ def set_green_led(on: bool) -> None:
 
 
 _SETTINGS_BASE = "ai_sensitivity,ac_on,ac_manual,sleep_on,sleep_manual,sleep_delay_sec"
-_SETTINGS_ABSENCE = ",absence_enabled,absence_delay_sec"
+_SETTINGS_ADDED = ",absence_enabled,absence_delay_sec,sleep_auto_enabled"
 
 # Dropped to _SETTINGS_BASE the first time Supabase says it has no absence
 # columns, so we stop re-asking for them every loop.
-_settings_select = _SETTINGS_BASE + _SETTINGS_ABSENCE
+_settings_select = _SETTINGS_BASE + _SETTINGS_ADDED
 
 
 def fetch_settings() -> dict:
     """Reads the dashboard-controlled settings (AI sensitivity, manual
     overrides) back from Supabase.
 
-    Retries without the absence columns if they are missing. PostgREST fails
-    the *whole* query with a 400 when a single selected column does not exist,
-    so pulling this code onto a device before running the migration in
+    Retries without the newer columns if they are missing. PostgREST fails the
+    *whole* query with a 400 when a single selected column does not exist, so
+    pulling this code onto a device before running the migration in
     supabase_setup.sql would otherwise take AC manual control, sleep mode and
-    the AI sensitivity down with it, rather than just leaving absence auto-off
-    switched off.
+    the AI sensitivity down with it, rather than just leaving the newer
+    features switched off.
     """
     global _settings_select
     headers = {
@@ -220,8 +222,9 @@ def fetch_settings() -> dict:
     r = requests.get(base + _settings_select, headers=headers, timeout=5)
     if r.status_code == 400 and _settings_select != _SETTINGS_BASE:
         print(
-            "Supabase has no absence_enabled/absence_delay_sec columns -- run "
-            "server/supabase_setup.sql. Absence auto-off stays off until then."
+            "Supabase is missing absence_enabled/absence_delay_sec/"
+            "sleep_auto_enabled -- run server/supabase_setup.sql. Absence "
+            "auto-off and auto-sleep stay off until then."
         )
         _settings_select = _SETTINGS_BASE
         r = requests.get(base + _settings_select, headers=headers, timeout=5)
@@ -289,6 +292,7 @@ def main():
     lying_auto_since = None  # monotonic time when the lying stretch started
     lying_last_seen = 0.0    # monotonic time of the most recent lying frame
     absent_since = None      # monotonic time when the room last went empty
+    sleep_auto_fired = False  # auto-sleep already fired for this lying stretch
 
     last_heartbeat = 0.0
 
@@ -450,22 +454,44 @@ def main():
             lying_last_seen = now_mono
         elif lying_auto_since is not None and now_mono - lying_last_seen > LYING_GRACE_S:
             lying_auto_since = None
+            # Getting up re-arms the auto trigger for the next lying stretch.
+            sleep_auto_fired = False
 
-        if settings.get("sleep_manual"):
-            new_sleep_on = bool(settings.get("sleep_on"))
-        elif (
-            not sleep_on
+        # Auto-on is its own switch now (sleep_auto_enabled), checked before
+        # sleep_manual rather than only when sleep_manual is false. It used to
+        # be the else branch of sleep_manual, which meant the first time anyone
+        # touched the dashboard toggle sleep_manual latched true forever and
+        # auto never fired again -- there was no way back to automatic short of
+        # editing the column by hand.
+        #
+        # It fires once per lying stretch: sleep_auto_fired stays set until the
+        # person gets up, so switching sleep off by hand while still lying down
+        # keeps it off instead of having it come straight back on.
+        sleep_auto_expired = (
+            bool(settings.get("sleep_auto_enabled"))
+            and not sleep_auto_fired
+            and not sleep_on
             and lying_auto_since is not None
             and now_mono - lying_auto_since >= sleep_delay_sec
-        ):
+        )
+
+        if sleep_auto_expired:
             new_sleep_on = True
+            sleep_auto_fired = True
+        elif settings.get("sleep_manual"):
+            new_sleep_on = bool(settings.get("sleep_on"))
         else:
             new_sleep_on = sleep_on
 
         if new_sleep_on != sleep_on:
             sleep_on = new_sleep_on
             state_changed = True
-            mode = "manual" if settings.get("sleep_manual") else "auto"
+            if sleep_auto_expired:
+                mode = f"auto, lying >{sleep_delay_sec}s"
+            elif settings.get("sleep_manual"):
+                mode = "manual"
+            else:
+                mode = "held"
             print(f"Sleep mode {'ON' if sleep_on else 'OFF'} ({mode})")
 
         # Track sleep mode directly, with no person_present gate. The LED used to

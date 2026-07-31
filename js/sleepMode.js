@@ -17,12 +17,17 @@
     const unitMinBtn = document.getElementById("sleepUnitMinBtn");
     const unitSecBtn = document.getElementById("sleepUnitSecBtn");
     const autoNoteEl = document.getElementById("sleepAutoNote");
+    const autoToggleBtn = document.getElementById("sleepAutoToggleBtn");
 
     // on/manual/delaySeconds are driven by person_detect.py via Supabase: it
     // tracks how long someone's been lying down and auto-triggers sleep_on
-    // after delaySeconds, unless the dashboard has manually taken over.
+    // after delaySeconds, but only while autoEnabled is set. That switch used
+    // to be implicit -- automatic meant "sleep_manual is false" -- so the first
+    // press of the ON/OFF toggle below turned the automatic trigger off for
+    // good. It is its own setting now.
     let on = false;
     let manual = false;
+    let autoEnabled = false;
     let delaySeconds = 600;
     let unit = localStorage.getItem(UNIT_KEY) === "sec" ? "sec" : "min";
 
@@ -44,7 +49,14 @@
         toggleBtn.textContent = on ? "ON" : "OFF";
         toggleBtn.classList.toggle("on", on);
         toggleBtn.classList.toggle("off", !on);
-        autoNoteEl.textContent = on && !manual ? "누운 지 " + formatDelay() + " 경과 - 자동으로 켜짐" : "";
+
+        autoToggleBtn.textContent = autoEnabled ? "ON" : "OFF";
+        autoToggleBtn.classList.toggle("on", autoEnabled);
+        autoToggleBtn.classList.toggle("off", !autoEnabled);
+
+        autoNoteEl.textContent = autoEnabled
+            ? "누운 지 " + formatDelay() + " 경과하면 자동으로 켜집니다"
+            : "";
         renderModeBtn();
     }
 
@@ -72,6 +84,17 @@
             await client
                 .from("device_status")
                 .update({ sleep_on: on, sleep_manual: true })
+                .eq("device_id", DEVICE_ID);
+        }
+    });
+
+    autoToggleBtn.addEventListener("click", async () => {
+        autoEnabled = !autoEnabled;
+        renderToggle();
+        if (client) {
+            await client
+                .from("device_status")
+                .update({ sleep_auto_enabled: autoEnabled })
                 .eq("device_id", DEVICE_ID);
         }
     });
@@ -111,6 +134,7 @@
         if (!row) return;
         on = !!row.sleep_on;
         manual = !!row.sleep_manual;
+        autoEnabled = !!row.sleep_auto_enabled;
         if (Number.isFinite(row.sleep_delay_sec)) {
             delaySeconds = row.sleep_delay_sec;
             renderDelay();
